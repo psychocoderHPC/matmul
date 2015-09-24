@@ -398,7 +398,7 @@ install:
 
     #-------------------------------------------------------------------------------
     # Clone alpaka.
-    - git clone -b develop --single-branch --depth 1 https://github.com/ComputationalRadiationPhysics/alpaka.git alpaka
+    - git clone -b topic-vectorization --single-branch --depth 1 https://github.com/ComputationalRadiationPhysics/alpaka.git alpaka
     - cd alpaka/
     - export MATMUL_ALPAKA_ROOT_DIR=`pwd`
     - echo MATMUL_ALPAKA_ROOT_DIR="${MATMUL_ALPAKA_ROOT_DIR}"
