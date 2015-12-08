@@ -31,7 +31,7 @@
     #include <math.h>               // ceil
     #include <type_traits>          // std::is_same
 
-
+#define N_ELEMENTS 1
 
     //#############################################################################
     // This function only works for square blocks.
@@ -108,9 +108,9 @@
             
             //Shared memory used to store the current blocks of A and B.
             TElem * const pBlockSharedA(acc.template getBlockSharedExternMem<TElem>());
-            TElem * const pBlockSharedB(pBlockSharedA + blockThreadsExtents.prod() * threadElemsExtents.prod());
+            TElem * const pBlockSharedB(pBlockSharedA + blockThreadsExtents.prod() * N_ELEMENTS);
 
-            //TSize const sharedBlockIdx1d(linearizedBlockThreadIdx * threadElemsExtents.prod());
+            //TSize const sharedBlockIdx1d(linearizedBlockThreadIdx * N_ELEMENTS);
 
             // If the element corresponding to the current thread is outside of the respective matrix.
             // Can not be calculated on this place
@@ -120,9 +120,11 @@
             bool const insideB(true);
             bool const insideC(insideA && insideB);
 
-            TElem dotProduct[threadElemsExtents.prod()];
+            TElem dotProduct[N_ELEMENTS];
 
-            for(size_t i = 0; i < threadElemsExtents.prod(); ++i){
+            assert(N_ELEMENTS == N_ELEMENTS);
+
+            for(size_t i = 0; i < N_ELEMENTS; ++i){
                 dotProduct[i] = 0;
             }
 
@@ -181,7 +183,7 @@
                                 + ( blockThreadIdxX * threadElemsExtentX )
                                 + ( col_j );
                                 
-                                pBlockSharedB[sharedBlockIdx1d] =  B[BIdx1d];
+                            pBlockSharedB[sharedBlockIdx1d] =  B[BIdx1d];
                                 //std::cout << "row_i: " << row_i << " col_j: " << col_j << " BIdxX: " << AIdxX <<" sharedBlockIdx1d: " << sharedBlockIdx1d << " written value: " << pBlockSharedB[sharedBlockIdx1d] << std::endl;
                                 
                         }
@@ -189,62 +191,63 @@
                 }
                 
 
-                // Synchronize to make sure the complete blocks are loaded before starting the computation.
-                alpaka::block::sync::syncBlockThreads(acc);
+                // // Synchronize to make sure the complete blocks are loaded before starting the computation.
+                // alpaka::block::sync::syncBlockThreads(acc);
 
-                // Compute the dot products within shared memory.
-                for(size_t row_i = 0; row_i < threadElemsExtentX; ++row_i)
-                {
-                    for(size_t col_j = 0; col_j < threadElemsExtentY; ++col_j)
-                    {                
-                        for(TSize k3 = 0; k3 < blockElemsExtentX; ++k3)
-                        {
+              //   // Compute the dot products within shared memory.
+            //     for(size_t row_i = 0; row_i < threadElemsExtentX; ++row_i)
+            //     {
+            //         for(size_t col_j = 0; col_j < threadElemsExtentY; ++col_j)
+            //         {                
+            //             for(TSize k3 = 0; k3 < blockElemsExtentX; ++k3)
+            //             {
 
-                            TSize const blockAidx = ( blockThreadIdxY * blockThreadsExtentX ) // block row
-                                + ( row_i * blockElemsExtentX ) 
-                                + ( k3 );
+            //                 TSize const blockAidx = ( blockThreadIdxY * blockThreadsExtentX ) // block row
+            //                     + ( row_i * blockElemsExtentX ) 
+            //                     + ( k3 );
                             
-                            TSize const blockBidx = ( k3 * blockThreadsExtentY * threadElemsExtentY )
-                                + ( blockThreadIdxX * threadElemsExtentX )
-                                + ( col_j );
+            //                 TSize const blockBidx = ( k3 * blockThreadsExtentY * threadElemsExtentY )
+            //                     + ( blockThreadIdxX * threadElemsExtentX )
+            //                     + ( col_j );
                             
-                            // std::cout << " i:  " << row_i
-                            //           << " j:  " << col_j
-                            //           << " k3: " << k3
-                            //           << " A:  " << pBlockSharedA[blockAidx]
-                            //           << " B:  " << pBlockSharedB[blockBidx] << std::endl;
+            //                 // std::cout << " i:  " << row_i
+            //                 //           << " j:  " << col_j
+            //                 //           << " k3: " << k3
+            //                 //           << " A:  " << pBlockSharedA[blockAidx]
+            //                 //           << " B:  " << pBlockSharedB[blockBidx] << std::endl;
                         
-                            dotProduct[row_i * threadElemsExtentX + col_j] +=  pBlockSharedA[blockAidx] * pBlockSharedB[blockBidx];
+            //                 dotProduct[row_i * threadElemsExtentX + col_j] +=  pBlockSharedA[blockAidx] * pBlockSharedB[blockBidx];
 
-                        }
+            //             }
                      
-                    }
+            //         }
                     
-                }
+            //     }
 
-                // Synchronize to make sure that the preceding computation is done before loading the next blocks of A and B.
-                alpaka::block::sync::syncBlockThreads(acc);
+            //     // Synchronize to make sure that the preceding computation is done before loading the next blocks of A and B.
+            //     alpaka::block::sync::syncBlockThreads(acc);
             }
 
-            for(size_t row_i = 0; row_i < threadElemsExtentX; ++row_i)
-            {
-                for(size_t col_j = 0; col_j < threadElemsExtentX; ++col_j)
-                {
-                    TSize const CIdx1d = ( gridThreadIdxY *  threadElemsExtentY * ldc ) // global row
-                        + ( row_i * ldc ) // elements row
-                        + ( gridThreadIdxX * threadElemsExtentX ) // global col
-                        + ( col_j); // elements col
+            // for(size_t row_i = 0; row_i < threadElemsExtentX; ++row_i)
+            // {
+            //     for(size_t col_j = 0; col_j < threadElemsExtentX; ++col_j)
+            //     {
+            //         TSize const CIdx1d = ( gridThreadIdxY *  threadElemsExtentY * ldc ) // global row
+            //             + ( row_i * ldc ) // elements row
+            //             + ( gridThreadIdxX * threadElemsExtentX ) // global col
+            //             + ( col_j); // elements col
 
-                    // std::cout << " row_i: " << row_i
-                    //           << " col_j: " << col_j
-                    //           << " dotProduct: " << dotProduct[row_i * threadElemsExtentX + col_j]
-                    //           << " CIdx1d: " << CIdx1d
-                    //           << std::endl;
+            //         // std::cout << " row_i: " << row_i
+            //         //           << " col_j: " << col_j
+            //         //           << " dotProduct: " << dotProduct[row_i * threadElemsExtentX + col_j]
+            //         //           << " CIdx1d: " << CIdx1d
+            //         //           << std::endl;
                     
-                    C[CIdx1d] = alpha * dotProduct[row_i * threadElemsExtentX + col_j] + beta * C[CIdx1d];
-                }
+            //         C[CIdx1d] = alpha * dotProduct[row_i * threadElemsExtentX + col_j] + beta * C[CIdx1d];
+            //     }
                 
-            }                
+                // }
+            
             
         }
         
@@ -528,8 +531,8 @@
             n);
 
         alpaka::Vec<Dim2, TSize> const elemExtent(
-            static_cast<TSize>(100),
-            static_cast<TSize>(100));
+            static_cast<TSize>(1),
+            static_cast<TSize>(1));
 
         // Let alpaka calculate good block and grid sizes given our full problem extents.
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> const workDiv(
@@ -621,8 +624,8 @@
             n);
 
         alpaka::Vec<Dim2, TSize> const elemExtent(
-            static_cast<TSize>(2),
-            static_cast<TSize>(2));
+            static_cast<TSize>(1),
+            static_cast<TSize>(1));
 
 
         // Wrap the Pointers into memory buffer objects.
