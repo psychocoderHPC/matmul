@@ -36,7 +36,7 @@
     //#############################################################################
     // This function only works for square blocks.
     //#############################################################################
-    class GemmAlpakaSharedKernel
+    class GemmAlpakaElementsKernel
     {
     public:
         ALPAKA_NO_HOST_ACC_WARNING
@@ -250,6 +250,108 @@
         
     };
 
+    //#############################################################################
+    // This function only works for square blocks.
+    //#############################################################################
+    class GemmAlpakaSharedKernel
+    {
+    public:
+        ALPAKA_NO_HOST_ACC_WARNING
+        template<
+            typename TAcc,
+            typename TElem>
+        ALPAKA_FN_ACC auto operator()(
+            TAcc const & acc,
+            TSize const & m, TSize const & n, TSize const & k,
+            TElem const & alpha,
+            TElem const * const MATMUL_RESTRICT A, TSize const & lda,
+            TElem const * const MATMUL_RESTRICT B, TSize const & ldb,
+            TElem const & beta,
+            TElem * const MATMUL_RESTRICT C, TSize const & ldc) const
+        -> void
+        {
+            static_assert(alpaka::dim::Dim<TAcc>::value == 2u,
+                "The accelerator used for the GemmAlpakaKernel has to be 2 dimensional!");
+
+            // Column and row of C to calculate.
+            auto const gridThreadIdx(alpaka::idx::getIdx<alpaka::Grid, alpaka::Threads>(acc));
+            TSize const & gridThreadIdxX(gridThreadIdx[1u]);
+            TSize const & gridThreadIdxY(gridThreadIdx[0u]);
+
+            // Column and row inside the block of C to calculate.
+            auto const blockThreadIdx(alpaka::idx::getIdx<alpaka::Block, alpaka::Threads>(acc));
+            TSize const & blockThreadIdxX(blockThreadIdx[1u]);
+            TSize const & blockThreadIdxY(blockThreadIdx[0u]);
+
+            // The block threads extents.
+            auto const blockThreadsExtents(alpaka::workdiv::getWorkDiv<alpaka::Block, alpaka::Threads>(acc));
+            TSize const & blockThreadsExtentX(blockThreadsExtents[1u]);
+            TSize const & blockThreadsExtentY(blockThreadsExtents[0u]);
+            //assert(blockThreadsExtentX == blockThreadsExtentY);
+            TSize const & blockThreadsExtent(blockThreadsExtentX);
+
+            // Shared memory used to store the current blocks of A and B.
+            TElem * const pBlockSharedA(acc.template getBlockSharedExternMem<TElem>());
+            TElem * const pBlockSharedB(pBlockSharedA + blockThreadsExtentX*blockThreadsExtentY);
+
+            TSize const sharedBlockIdx1d(blockThreadIdxY*blockThreadsExtentX + blockThreadIdxX);
+
+            // If the element corresponding to the current thread is outside of the respective matrix.
+            bool const insideA(gridThreadIdxY < m);
+            bool const insideB(gridThreadIdxX < n);
+            bool const insideC(insideA && insideB);
+
+            TElem dotProduct(0);
+
+            // Loop over all blocks of A and B that are required to compute the C block.
+            TSize const blockMulCount(
+                static_cast<TSize>(
+                    alpaka::math::ceil(
+                        acc,
+                        static_cast<float>(k)/static_cast<float>(blockThreadsExtent))));
+            for(TSize k2(0); k2<blockMulCount; ++k2)
+            {
+                // Copy the current blocks of A and B into shared memory in parallel.
+                // If the element of the current thread is outside of the matrix, zero is written into the shared memory.
+                // This is possible because zero is a result neutral extension of the matrices regarding the dot product.
+                TSize const AIdxX(k2*blockThreadsExtentX + blockThreadIdxX);
+                TSize const AIdx1d(gridThreadIdxY*lda + AIdxX);
+                pBlockSharedA[sharedBlockIdx1d] =
+                    ((!insideA) || (AIdxX>=k))
+                    ? static_cast<TElem>(0)
+                    : A[AIdx1d];
+
+                TSize const BIdxY(k2*blockThreadsExtentY + blockThreadIdxY);
+                TSize const BIdx1d(BIdxY*ldb + gridThreadIdxX);
+                pBlockSharedB[sharedBlockIdx1d] =
+                    ((!insideB) || (BIdxY>=k))
+                    ? static_cast<TElem>(0)
+                    : B[BIdx1d];
+
+                // Synchronize to make sure the complete blocks are loaded before starting the computation.
+                alpaka::block::sync::syncBlockThreads(acc);
+
+                // Compute the dot products within shared memory.
+                for(TSize k3(0); k3<blockThreadsExtent; ++k3)
+                {
+                    dotProduct += pBlockSharedA[blockThreadIdxY*blockThreadsExtentX + k3]
+                        * pBlockSharedB[k3*blockThreadsExtentY + blockThreadIdxX];
+                }
+
+                // Synchronize to make sure that the preceding computation is done before loading the next blocks of A and B.
+                alpaka::block::sync::syncBlockThreads(acc);
+            }
+
+            // If the element is outside of the matrix it was only a helper thread that did not calculate any meaningful results.
+            if(insideC)
+            {
+                TSize const CIdx1d(gridThreadIdxY*ldc + gridThreadIdxX);
+                C[CIdx1d] = alpha * dotProduct + beta * C[CIdx1d];
+            }
+        }
+        
+    };
+
     namespace alpaka
     {
         namespace kernel
@@ -262,7 +364,57 @@
                 template<
                     typename TAcc>
                 struct BlockSharedExternMemSizeBytes<
-                    GemmAlpakaSharedKernel,
+                    GemmAlpakaElementsKernel,                    
+                    TAcc>
+                {
+                    //-----------------------------------------------------------------------------
+                    //! \return The size of the shared memory allocated for a block.
+                    //-----------------------------------------------------------------------------
+                    template<
+                        typename TElem>
+                    ALPAKA_FN_HOST static auto getBlockSharedExternMemSizeBytes(
+                        alpaka::Vec<alpaka::dim::Dim<TAcc>, size::Size<TAcc>> const & vblockThreadsExtents,
+                        TSize const & m,
+                        TSize const & n,
+                        TSize const & k,
+                        TElem const & alpha,
+                        TElem const * const A,
+                        TSize const & lda,
+                        TElem const * const B,
+                        TSize const & ldb,
+                        TElem const & beta,
+                        TElem * const C,
+                        TSize const & ldc)
+                    -> size::Size<TAcc>
+                    {
+                        static_assert(
+                            std::is_same<TSize, size::Size<TAcc>>::value,
+                            "TSize and size::Size<TAcc> have to be identical!");
+
+                        boost::ignore_unused(m);
+                        boost::ignore_unused(n);
+                        boost::ignore_unused(k);
+                        boost::ignore_unused(alpha);
+                        boost::ignore_unused(A);
+                        boost::ignore_unused(lda);
+                        boost::ignore_unused(B);
+                        boost::ignore_unused(ldb);
+                        boost::ignore_unused(beta);
+                        boost::ignore_unused(C);
+                        boost::ignore_unused(ldc);
+
+                        // Reserve the buffer for the two blocks of A and B.
+                        return 2u * vblockThreadsExtents.prod() * sizeof(TElem);
+                    }
+                };
+
+                //#############################################################################
+                //! The trait for getting the size of the block shared extern memory for a kernel.
+                //#############################################################################
+                template<
+                    typename TAcc>
+                struct BlockSharedExternMemSizeBytes<
+                    GemmAlpakaSharedKernel,                    
                     TAcc>
                 {
                     //-----------------------------------------------------------------------------
@@ -528,8 +680,8 @@
             n);
 
         alpaka::Vec<Dim2, TSize> const elemExtent(
-            static_cast<TSize>(100),
-            static_cast<TSize>(100));
+            static_cast<TSize>(1),
+            static_cast<TSize>(1));
 
         // Let alpaka calculate good block and grid sizes given our full problem extents.
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> const workDiv(
