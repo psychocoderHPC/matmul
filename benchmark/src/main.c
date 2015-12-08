@@ -101,8 +101,10 @@ double measureRandomMatMul(
     #endif
     }
 #else
-    TElem const * const A = matmul_arr_alloc_fill_rand(elemCount, minVal, maxVal);
-    TElem const * const B = matmul_arr_alloc_fill_rand(elemCount, minVal, maxVal);
+    /* TElem const * const A = matmul_arr_alloc_fill_rand(elemCount, minVal, maxVal); */
+    /* TElem const * const B = matmul_arr_alloc_fill_rand(elemCount, minVal, maxVal); */
+    TElem const * const A = matmul_arr_alloc_fill_idx(elemCount);
+    TElem const * const B = matmul_arr_alloc_fill_idx(elemCount);
     TElem * const C = matmul_arr_alloc(elemCount);
     #ifdef MATMUL_BENCHMARK_VERIFY_RESULT
         TElem * const D = matmul_arr_alloc(elemCount);
