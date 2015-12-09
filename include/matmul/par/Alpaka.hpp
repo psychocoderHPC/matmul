@@ -120,13 +120,13 @@
             bool const insideB(true);
             bool const insideC(insideA && insideB);
 
-            TElem dotProduct[N_ELEMENTS];
+            // TElem dotProduct[N_ELEMENTS];
 
-            assert(N_ELEMENTS == N_ELEMENTS);
+            // assert(N_ELEMENTS == N_ELEMENTS);
 
-            for(size_t i = 0; i < N_ELEMENTS; ++i){
-                dotProduct[i] = 0;
-            }
+            // for(size_t i = 0; i < N_ELEMENTS; ++i){
+            //     dotProduct[i] = 0;
+            // }
 
             // Loop over all blocks of A and B that are required to compute the C block.
             TSize const nBlocks(
@@ -168,27 +168,27 @@
                     
                 }
 
-                for(size_t row_i = 0; row_i < threadElemsExtentX; ++row_i) 
-                {
-                        for(size_t col_j = 0; col_j < threadElemsExtentY; ++col_j)
-                        {
+                // for(size_t row_i = 0; row_i < threadElemsExtentX; ++row_i) 
+                // {
+                //         for(size_t col_j = 0; col_j < threadElemsExtentY; ++col_j)
+                //         {
 
-                            TSize const BIdx1d = (BIdxY * ldb) // global row
-                                + ( row_i * ldb ) // elements row                                
-                                + ( gridThreadIdxX * threadElemsExtentX )
-                                + ( col_j );
+                //             TSize const BIdx1d = (BIdxY * ldb) // global row
+                //                 + ( row_i * ldb ) // elements row                                
+                //                 + ( gridThreadIdxX * threadElemsExtentX )
+                //                 + ( col_j );
 
-                            TSize const sharedBlockIdx1d = ( blockThreadIdxY * blockElemsExtentX )
-                                + ( row_i * blockElemsExtentX)
-                                + ( blockThreadIdxX * threadElemsExtentX )
-                                + ( col_j );
+                //             TSize const sharedBlockIdx1d = ( blockThreadIdxY * blockElemsExtentX )
+                //                 + ( row_i * blockElemsExtentX)
+                //                 + ( blockThreadIdxX * threadElemsExtentX )
+                //                 + ( col_j );
                                 
-                            pBlockSharedB[sharedBlockIdx1d] =  B[BIdx1d];
-                                //std::cout << "row_i: " << row_i << " col_j: " << col_j << " BIdxX: " << AIdxX <<" sharedBlockIdx1d: " << sharedBlockIdx1d << " written value: " << pBlockSharedB[sharedBlockIdx1d] << std::endl;
+                //             pBlockSharedB[sharedBlockIdx1d] =  B[BIdx1d];
+                //                 //std::cout << "row_i: " << row_i << " col_j: " << col_j << " BIdxX: " << AIdxX <<" sharedBlockIdx1d: " << sharedBlockIdx1d << " written value: " << pBlockSharedB[sharedBlockIdx1d] << std::endl;
                                 
-                        }
+                //         }
                     
-                }
+                // }
                 
 
                 // // Synchronize to make sure the complete blocks are loaded before starting the computation.
@@ -305,6 +305,9 @@
                         boost::ignore_unused(ldc);
 
                         // Reserve the buffer for the two blocks of A and B.
+                        printf("\n%i\n", vblockThreadsExtents.prod());
+                        printf("\n%i\n", sizeof(TElem));
+                        printf("\n%i\n", 2u * vblockThreadsExtents.prod() * sizeof(TElem));
                         return 2u * vblockThreadsExtents.prod() * sizeof(TElem);
                     }
                 };
