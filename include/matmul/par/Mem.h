@@ -60,7 +60,7 @@ struct Matrix
 
     ALPAKA_FN_ACC
     Matrix(
-        T * const MATMUL_RESTRICT ptr,
+        T * const ptr,
         Vec2 const & extent
     ) :
         m_ptr(ptr),
@@ -70,7 +70,7 @@ struct Matrix
 
     ALPAKA_FN_ACC
     Matrix(
-        const T * const MATMUL_RESTRICT ptr,
+        const T * const ptr,
         Vec2 const & extent
     ) :
         m_ptr( const_cast<T*>( ptr ) ),
@@ -100,7 +100,7 @@ struct Matrix
         return m_ptr[ linearIndex ];
     }
 
-    T * const MATMUL_RESTRICT m_ptr;
+    T * const m_ptr;
     Vec2 const m_extent;
 };
 

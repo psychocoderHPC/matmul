@@ -33,7 +33,7 @@
     #include <math.h>               // ceil
     #include <type_traits>          // std::is_same
 
-    using VecSize = alpaka::dim::DimInt<4u>;
+    using VecSize = alpaka::dim::DimInt<16u>;
 
     class GemmAlpakaElementsKernel
     {
@@ -46,10 +46,10 @@
             TAcc const & acc,
             TSize const & m, TSize const & n, TSize const & k,
             TElem const & alpha,
-            TElem const * const MATMUL_RESTRICT A, TSize const & lda,
-            TElem const * const MATMUL_RESTRICT B, TSize const & ldb,
+            TElem const * const A, TSize const & lda,
+            TElem const * const B, TSize const & ldb,
             TElem const & beta,
-            TElem * const MATMUL_RESTRICT C, TSize const & ldc) const
+            TElem * const C, TSize const & ldc) const
         -> void
         {
 
@@ -85,6 +85,8 @@
                 )
             );
 
+            //using Dim2 = alpaka::dim::DimInt<2u>;
+            //alpaka::Vec<Dim2, TSize> const numThreads(16,16);
             auto const numBlocks(alpaka::workdiv::getWorkDiv<alpaka::Grid, alpaka::Blocks>(acc));
             auto const numThreads(alpaka::workdiv::getWorkDiv<alpaka::Block, alpaka::Threads>(acc));
 
@@ -98,6 +100,19 @@
             mem::Vec2 const workSize(
                 numThreads[ 0 ] * numWorkElemsPerDim,
                 numThreads[ 1 ] * numWorkElemsPerDim
+            );
+
+            //Shared memory used to store the current blocks of A and B.
+            TElem * const sharedBasePointer(acc.template getBlockSharedExternMem<TElem>());
+            TElem * const sharedBasePointerB(sharedBasePointer + workSize[0] * workSize[1]);
+            Matrix sharedMatA(
+                sharedBasePointer,
+                 workSize
+            );
+
+            Matrix sharedMatB(
+                sharedBasePointerB,
+                workSize
             );
 
             using MVecN = mem::MathVec<
@@ -132,44 +147,70 @@
             TSize const currentThreadInB_x( blockThreadIdx[ 1 ] * numWorkElemsPerDim);
             // needs architecture based mapping
             TSize const offsetInA_y(
-                gridBlockIdx[ 0 ] * workSize[ 0 ] +
-                currentThreadInA_y
+                gridBlockIdx[ 0 ] * workSize[ 0 ]
+
             );
             TSize const offsetInB_x(
-                gridBlockIdx[ 1 ] * workSize[ 1 ] +
-                currentThreadInB_x
+                gridBlockIdx[ 1 ] * workSize[ 1 ]
+
             );
+
+
 
             for(TSize blockA_x = 0; blockA_x < nBlocks; ++blockA_x)
             {
-
-
                 TSize const offsetA_x = blockA_x * workSize[ 1 ];
+                mem::Vec2 const globalBlockOffsetInA(
+                    offsetInA_y,
+                    offsetA_x
+                );
+                mem::Vec2 const globalBlockOffsetInB(
+                    offsetA_x,
+                    offsetInB_x
+                );
+                //load shared A
+                for( TSize i(0); i < numWorkElemsPerDim; ++i )
+                {
+                    for( TSize j(0); j < numWorkElemsPerDim; ++j )
+                    {
+                        mem::Vec2 const offsetInTile(
+                            currentThreadInA_y + i,
+                            currentThreadInB_x + j
+                        );
+
+                        sharedMatA[ offsetInTile ]= matA[ globalBlockOffsetInA + offsetInTile ];
+                        sharedMatB[ offsetInTile ]= matB[ globalBlockOffsetInB + offsetInTile ];
+                    }
+                }
+
+                alpaka::block::sync::syncBlockThreads(acc);
 
                 // move over line in A workSize
                 for( TSize k3 = 0; k3 < workSize[ 1 ]; ++k3 )
                 {
                     mem::Vec2 const globalIdx_A(
-                        offsetInA_y,
-                        offsetA_x + k3
+                        currentThreadInA_y,
+                        k3
                     );
                     mem::Vec2 const globalIdx_B(
-                        offsetA_x  + k3,
-                        offsetInB_x
+                        k3,
+                        currentThreadInB_x
                     );
                     //std::cout<<"gA="<<globalIdx_A<<" gB="<<globalIdx_B<<std::endl;
                     MVecN tmpA;
                     MVecN tmpB;
+
+                    #pragma unroll 2
                     for( TSize d(0); d < numWorkElemsPerDim; ++d )
                     {
-                        tmpA[ d ] = matA[
+                        tmpA[ d ] = sharedMatA[
                             mem::Vec2(
                                 globalIdx_A[ 0 ] + d,
                                 globalIdx_A[ 1 ]
                             )
                         ];
 
-                        tmpB[ d ] = matB[
+                        tmpB[ d ] = sharedMatB[
                             mem::Vec2(
                                 globalIdx_B[ 0 ],
                                 globalIdx_B[ 1 ] + d
@@ -178,12 +219,14 @@
                         //std::cout<<"tmpA="<<tmpA[d]<<" tmptmpB="<<tmpTmpB[ d ]<<std::endl;
                     }
 
+                    #pragma unroll 2
                     for( TSize r(0); r < numWorkElemsPerDim; ++r )
                     {
                         for( TSize d(0); d < numWorkElemsPerDim; ++d )
                             matDot[r][d] += tmpA[d] * tmpB[( d + r ) % numWorkElemsPerDim];
                     }
                 }
+                alpaka::block::sync::syncBlockThreads(acc);
 
             }
 
@@ -196,13 +239,14 @@
                 for( TSize j(0); j < numWorkElemsPerDim; ++j )
                 {
                     mem::Vec2 const offsetC(
-                        offsetInA_y + i,
-                        offsetInB_x + j
+                        offsetInA_y + currentThreadInA_y + i,
+                        offsetInB_x + currentThreadInB_x + j
                     );
                     matC[ offsetC ] = alpha * matDot[ (j + numWorkElemsPerDim - i) % numWorkElemsPerDim ][ i ] + beta * matC[ offsetC ];
 
                 }
             }
+
         }
     };
     //#############################################################################
@@ -576,7 +620,7 @@
                         boost::ignore_unused(ldc);
 
                         // Reserve the buffer for the two blocks of A and B.
-                        return 0; //2u * vblockThreadsExtents.prod() * sizeof(TElem);
+                        return 2u * vblockThreadsExtents.prod() * sizeof(TElem);
                     }
                 };
 

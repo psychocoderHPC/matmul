@@ -98,7 +98,9 @@
             }
 
             return
-                matmul_gemm_par_alpaka<alpaka::acc::AccCpuOmp2Threads<alpaka::dim::DimInt<2u>, TSize>, GemmAlpakaNoShared2Kernel>(
+                
+                matmul_gemm_par_alpaka<alpaka::acc::AccCpuOmp2Threads<alpaka::dim::DimInt<2u>, TSize>, GemmAlpakaElementsKernel>(
+                //matmul_gemm_par_alpaka<alpaka::acc::AccCpuOmp2Threads<alpaka::dim::DimInt<2u>, TSize>, GemmAlpakaNoShared2Kernel>(
                     m, n, k,
                     alpha,
                     A, lda,
