@@ -196,17 +196,17 @@
                         k3,
                         currentThreadInB_x
                     );
-                    //std::cout<<"gA="<<globalIdx_A<<" gB="<<globalIdx_B<<std::endl;
-                    MVecN tmpA;
+                        //std::cout<<"gA="<<globalIdx_A<<" gB="<<globalIdx_B<<std::endl;
+                       MVecN tmpA;
                     MVecN tmpB;
 
-                    #pragma unroll 2
+
                     for( TSize d(0); d < numWorkElemsPerDim; ++d )
                     {
                         tmpA[ d ] = sharedMatA[
                             mem::Vec2(
-                                globalIdx_A[ 0 ] + d,
-                                globalIdx_A[ 1 ]
+                            globalIdx_A[ 0 ] + d,
+                            globalIdx_A[ 1 ]
                             )
                         ];
 
@@ -219,11 +219,10 @@
                         //std::cout<<"tmpA="<<tmpA[d]<<" tmptmpB="<<tmpTmpB[ d ]<<std::endl;
                     }
 
-                    #pragma unroll 2
                     for( TSize r(0); r < numWorkElemsPerDim; ++r )
                     {
                         for( TSize d(0); d < numWorkElemsPerDim; ++d )
-                            matDot[r][d] += tmpA[d] * tmpB[( d + r ) % numWorkElemsPerDim];
+                            matDot[r][d] += tmpA[r] * tmpB[d];
                     }
                 }
                 alpaka::block::sync::syncBlockThreads(acc);
@@ -242,7 +241,7 @@
                         offsetInA_y + currentThreadInA_y + i,
                         offsetInB_x + currentThreadInB_x + j
                     );
-                    matC[ offsetC ] = alpha * matDot[ (j + numWorkElemsPerDim - i) % numWorkElemsPerDim ][ i ] + beta * matC[ offsetC ];
+                    matC[ offsetC ] = alpha * matDot[ i ][ j ] + beta * matC[ offsetC ];
 
                 }
             }
