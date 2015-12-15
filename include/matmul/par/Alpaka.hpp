@@ -35,58 +35,41 @@
 
     using VecSize = alpaka::dim::DimInt<16u>;
 
+    struct DummyKernel
+    {
+        template<
+            typename TAcc>
+        ALPAKA_FN_ACC auto operator()(
+            TAcc const & acc ) const
+        -> void
+        {
+        }
+    };
     class GemmAlpakaElementsKernel
     {
     public:
         ALPAKA_NO_HOST_ACC_WARNING
         template<
             typename TAcc,
-            typename TElem>
+            typename TElem,
+            typename MatA,
+            typename MatB,
+            typename MatC>
         ALPAKA_FN_ACC auto operator()(
             TAcc const & acc,
             TSize const & m, TSize const & n, TSize const & k,
             TElem const & alpha,
-            TElem const * const A, TSize const & lda,
-            TElem const * const B, TSize const & ldb,
+            MatA const & matA, TSize const & lda,
+            MatB const & matB, TSize const & ldb,
             TElem const & beta,
-            TElem * const C, TSize const & ldc) const
+            MatC matC, TSize const & ldc) const
         -> void
         {
 
             using Matrix = mem::Matrix<
                 TElem
             >;
-            using MatrixT = mem::Matrix<
-                TElem,
-                mem::TransposeAccess
-            >;
 
-            Matrix const matA(
-                A,
-                mem::Vec2(
-                    m,
-                    k
-                )
-            );
-
-            Matrix const matB(
-                B,
-                mem::Vec2(
-                    k,
-                    n
-                )
-            );
-
-            Matrix matC(
-                C,
-                mem::Vec2(
-                    m,
-                    n
-                )
-            );
-
-            //using Dim2 = alpaka::dim::DimInt<2u>;
-            //alpaka::Vec<Dim2, TSize> const numThreads(16,16);
             auto const numBlocks(alpaka::workdiv::getWorkDiv<alpaka::Grid, alpaka::Blocks>(acc));
             auto const numThreads(alpaka::workdiv::getWorkDiv<alpaka::Block, alpaka::Threads>(acc));
 
@@ -200,22 +183,20 @@
                         currentThreadInB_x
                     );
                     Matrix const tmpA(
-                        &(sharedMatA[
+                        sharedMatA.view(
                             mem::Vec2(
                                 globalIdx_A[ 0 ],
                                 globalIdx_A[ 1 ]
                             )
-                        ]),
-                        sharedMatA.m_extent
+                        )
                     );
                     Matrix const tmpB(
-                        &(sharedMatB[
+                        sharedMatB.view(
                             mem::Vec2(
                                 globalIdx_B[ 0 ],
                                 globalIdx_B[ 1 ]
                             )
-                        ]),
-                        sharedMatB.m_extent
+                        )
                     );
 
                     for( TSize i(0); i < numWorkElemsPerDim; ++i )
@@ -589,19 +570,23 @@
                     //! \return The size of the shared memory allocated for a block.
                     //-----------------------------------------------------------------------------
                     template<
-                        typename TElem>
+                        typename TElem,
+                        typename MatA,
+                        typename MatB,
+                        typename MatC
+                    >
                     ALPAKA_FN_HOST static auto getBlockSharedExternMemSizeBytes(
                         alpaka::Vec<alpaka::dim::Dim<TAcc>, size::Size<TAcc>> const & vblockThreadsExtents,
                         TSize const & m,
                         TSize const & n,
                         TSize const & k,
                         TElem const & alpha,
-                        TElem const * const A,
+                        MatA const & matA,
                         TSize const & lda,
-                        TElem const * const B,
+                        MatB const & matB,
                         TSize const & ldb,
                         TElem const & beta,
-                        TElem * const C,
+                        MatC matC,
                         TSize const & ldc)
                     -> size::Size<TAcc>
                     {
@@ -613,12 +598,12 @@
                         boost::ignore_unused(n);
                         boost::ignore_unused(k);
                         boost::ignore_unused(alpha);
-                        boost::ignore_unused(A);
+                        boost::ignore_unused(matA);
                         boost::ignore_unused(lda);
-                        boost::ignore_unused(B);
+                        boost::ignore_unused(matB);
                         boost::ignore_unused(ldb);
                         boost::ignore_unused(beta);
-                        boost::ignore_unused(C);
+                        boost::ignore_unused(matC);
                         boost::ignore_unused(ldc);
 
                         // Reserve the buffer for the two blocks of A and B.
@@ -917,6 +902,42 @@
         // Create an instance of the kernel functor.
         TKernelFnObj kernel;
 
+        using Matrix = mem::Matrix<
+            TElem
+        >;
+
+        Matrix const matA(
+            A,
+            mem::Vec2(
+                m,
+                k
+            )
+        );
+
+        Matrix const matB(
+            B,
+            mem::Vec2(
+                k,
+                n
+            )
+        );
+        Matrix matC(
+            C,
+            mem::Vec2(
+                m,
+                n
+            )
+        );
+
+        auto const execDummy(
+            alpaka::exec::create<TAcc>(
+                workDiv,
+                DummyKernel()
+            )
+        );
+        alpaka::stream::enqueue(stream, execDummy);
+        alpaka::wait::wait(stream);
+
         // Create the executor.
         // NOTE: We remove the __restrict__ because alpaka calls std::ref on the arguments and std::ref errors.
         // This is most probably undefined. MSVC compiles it without any warning.
@@ -927,12 +948,12 @@
             n,
             k,
             alpha,
-            reinterpret_cast<TElem const *>(A),
+            matA,
             lda,
-            reinterpret_cast<TElem const *>(B),
+            matB,
             ldb,
             beta,
-            reinterpret_cast<TElem *>(C),
+            matC,
             ldc));
 
         MATMUL_TIME_START;

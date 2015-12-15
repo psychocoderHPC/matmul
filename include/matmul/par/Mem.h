@@ -9,6 +9,11 @@ namespace mem
 using IndexType = size_t;
 using Dim2 = alpaka::dim::DimInt<2u>;
 using Vec2 = alpaka::Vec<Dim2,IndexType>;
+}
+
+namespace mem2
+{
+using namespace mem;
 
 template<
     typename T
@@ -50,13 +55,21 @@ struct TransposeAccess
     }
 };
 
+}
+
+namespace mem
+{
 template<
     typename T,
-    template <typename> class T_Access = IdentityAccess
+    template <typename> class T_Access = mem2::IdentityAccess
 >
 struct Matrix
 {
     using Access = const T_Access<T>;
+    using ThisType = Matrix<
+        T,
+        T_Access
+    >;
 
     ALPAKA_FN_ACC
     Matrix(
@@ -100,6 +113,21 @@ struct Matrix
         return m_ptr[ linearIndex ];
     }
 
+    ALPAKA_FN_ACC
+    auto
+    view(
+        Vec2 const & offset
+    ) const
+    -> ThisType
+    {
+        return ThisType(
+            &(*this).operator[](
+                offset
+            ),
+            m_extent
+        );
+    }
+
     T * const m_ptr;
     Vec2 const m_extent;
 };
@@ -110,7 +138,6 @@ template<
 >
 struct MathVec
 {
-
     using ThisType = MathVec<
         T,
         T_Dim

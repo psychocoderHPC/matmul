@@ -46,6 +46,31 @@
                 {
                     MATMUL_TIME_RETURN_EARLY_OUT;
                 }
+                
+                // build threads to avoid bad performance values
+                #pragma omp parallel// shared(n,lda,A,ldb,B,ldc,C)
+                {
+                    #ifdef MATMUL_OMP_PRINT_NUM_CORES
+                            #pragma omp single
+                            {
+                                printf(" p=%d ", omp_get_num_threads());
+                            }
+                    #endif
+                    int iM = (int)m;
+                    int i;
+                    #pragma omp for schedule(guided)
+                    for(i = 0; i < iM; ++i)
+                    {
+                        for(TSize k2 = 0; k2 < k; ++k2)
+                        {
+                            
+                            for(TSize j = 0; j < n; ++j)
+                            {
+                                i++;
+                            }
+                        }
+                    }
+                }
 
                 MATMUL_TIME_START;
 

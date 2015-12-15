@@ -35,6 +35,10 @@
     #define MATMUL_CUDA_RT_CHECK(cmd) {cudaError_t error = cmd; if(error!=cudaSuccess){printf("<%s>:%i ",__FILE__,__LINE__); printf("[CUDA] Error: %s\n", cudaGetErrorString(error));}}
 
     #ifdef MATMUL_BUILD_PAR_CUDA_FIXED_BLOCK_SIZE
+
+        __global__ void heatDevice( )
+        {
+        }
         //-----------------------------------------------------------------------------
         // This function only works for square blocks.
         //-----------------------------------------------------------------------------
@@ -636,7 +640,11 @@
 
             dim3 const dimBlock(blockThreadExtents[0], blockThreadExtents[1]);
             dim3 const dimGrid(gridBlockExtents[0], gridBlockExtents[1]);
-
+            
+            heatDevice<<<dimGrid,dimBlock>>>();
+            MATMUL_CUDA_RT_CHECK(cudaDeviceSynchronize());
+            
+            
             MATMUL_TIME_START;
 
             matmul_gemm_par_cuda_dyn_block_size_1d_extern_shared_kernel<<<
