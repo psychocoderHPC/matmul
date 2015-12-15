@@ -186,11 +186,11 @@
 
                 alpaka::block::sync::syncBlockThreads(acc);
 
-                MVecNN tmpA;
-                MVecNN tmpB;
+
                 // move over line in A workSize
                 for( TSize k3 = 0; k3 < workSize[ 0 ]; k3 +=numWorkElemsPerDim )
                 {
+
                     mem::Vec2 const globalIdx_A(
                         currentThreadInA_y,
                         k3
@@ -199,34 +199,32 @@
                         k3,
                         currentThreadInB_x
                     );
-                        //std::cout<<"gA="<<globalIdx_A<<" gB="<<globalIdx_B<<std::endl;
-
-                    for( TSize i(0); i < numWorkElemsPerDim; ++i )
-                        for( TSize j(0); j < numWorkElemsPerDim; ++j )
-                        {
-                            tmpA[ i ][ j ] = sharedMatA[
-                                mem::Vec2(
-                                globalIdx_A[ 0 ] + i,
-                                globalIdx_A[ 1 ] + j
-                                )
-                            ];
-
-                            tmpB[ i ] [ j ] = sharedMatB[
-                                mem::Vec2(
-                                    globalIdx_B[ 0 ] + i ,
-                                    globalIdx_B[ 1 ] + j
-                                )
-                            ];
-                            //std::cout<<"tmpA="<<tmpA[d]<<" tmptmpB="<<tmpTmpB[ d ]<<std::endl;
-                        }
+                    Matrix const tmpA(
+                        &(sharedMatA[
+                            mem::Vec2(
+                                globalIdx_A[ 0 ],
+                                globalIdx_A[ 1 ]
+                            )
+                        ]),
+                        sharedMatA.m_extent
+                    );
+                    Matrix const tmpB(
+                        &(sharedMatB[
+                            mem::Vec2(
+                                globalIdx_B[ 0 ],
+                                globalIdx_B[ 1 ]
+                            )
+                        ]),
+                        sharedMatB.m_extent
+                    );
 
                     for( TSize i(0); i < numWorkElemsPerDim; ++i )
                         for( TSize k(0); k < numWorkElemsPerDim; ++k )
                         {
-                            TElem const a = tmpA[i][k];
+                            TElem const a = tmpA[mem::Vec2(i,k)];
                             for( TSize j(0); j < numWorkElemsPerDim; ++j )
                             {
-                                    matDot[i][j] += a * tmpB[k][j];
+                                    matDot[i][j] += a * tmpB[mem::Vec2(k,j)];
                             }
                         }
                 }
