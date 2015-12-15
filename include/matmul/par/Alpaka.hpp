@@ -159,6 +159,7 @@
 
             for(TSize blockA_x = 0; blockA_x < nBlocks; ++blockA_x)
             {
+                //TSize const offsetA_x = (blockA_x + gridBlockIdx[1])%numBlocks[1] * workSize[ 1 ];
                 TSize const offsetA_x = blockA_x * workSize[ 1 ];
                 mem::Vec2 const globalBlockOffsetInA(
                     offsetInA_y,
@@ -185,8 +186,10 @@
 
                 alpaka::block::sync::syncBlockThreads(acc);
 
+                MVecNN tmpA;
+                MVecNN tmpB;
                 // move over line in A workSize
-                for( TSize k3 = 0; k3 < workSize[ 1 ]; ++k3 )
+                for( TSize k3 = 0; k3 < workSize[ 0 ]; k3 +=numWorkElemsPerDim )
                 {
                     mem::Vec2 const globalIdx_A(
                         currentThreadInA_y,
@@ -197,33 +200,35 @@
                         currentThreadInB_x
                     );
                         //std::cout<<"gA="<<globalIdx_A<<" gB="<<globalIdx_B<<std::endl;
-                       MVecN tmpA;
-                    MVecN tmpB;
 
+                    for( TSize i(0); i < numWorkElemsPerDim; ++i )
+                        for( TSize j(0); j < numWorkElemsPerDim; ++j )
+                        {
+                            tmpA[ i ][ j ] = sharedMatA[
+                                mem::Vec2(
+                                globalIdx_A[ 0 ] + i,
+                                globalIdx_A[ 1 ] + j
+                                )
+                            ];
 
-                    for( TSize d(0); d < numWorkElemsPerDim; ++d )
-                    {
-                        tmpA[ d ] = sharedMatA[
-                            mem::Vec2(
-                            globalIdx_A[ 0 ] + d,
-                            globalIdx_A[ 1 ]
-                            )
-                        ];
+                            tmpB[ i ] [ j ] = sharedMatB[
+                                mem::Vec2(
+                                    globalIdx_B[ 0 ] + i ,
+                                    globalIdx_B[ 1 ] + j
+                                )
+                            ];
+                            //std::cout<<"tmpA="<<tmpA[d]<<" tmptmpB="<<tmpTmpB[ d ]<<std::endl;
+                        }
 
-                        tmpB[ d ] = sharedMatB[
-                            mem::Vec2(
-                                globalIdx_B[ 0 ],
-                                globalIdx_B[ 1 ] + d
-                            )
-                        ];
-                        //std::cout<<"tmpA="<<tmpA[d]<<" tmptmpB="<<tmpTmpB[ d ]<<std::endl;
-                    }
-
-                    for( TSize r(0); r < numWorkElemsPerDim; ++r )
-                    {
-                        for( TSize d(0); d < numWorkElemsPerDim; ++d )
-                            matDot[r][d] += tmpA[r] * tmpB[d];
-                    }
+                    for( TSize i(0); i < numWorkElemsPerDim; ++i )
+                        for( TSize k(0); k < numWorkElemsPerDim; ++k )
+                        {
+                            TElem const a = tmpA[i][k];
+                            for( TSize j(0); j < numWorkElemsPerDim; ++j )
+                            {
+                                    matDot[i][j] += a * tmpB[k][j];
+                            }
+                        }
                 }
                 alpaka::block::sync::syncBlockThreads(acc);
 
