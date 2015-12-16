@@ -91,6 +91,40 @@
     };
 #endif
 
+    template<
+        typename T_Size
+    >
+    struct ElementMatMul
+    {
+        template<
+            typename MatA,
+            typename MatB,
+            typename MatC
+        >
+        ALPAKA_FN_ACC
+        void
+        operator()(
+            MatA const & matA,
+            MatB const & matB,
+            MatC & matC
+        ) const
+        {
+            using Vec2 = typename MatA::IndexType;
+
+            constexpr auto numElements = T_Size::value;
+            for( TSize i(0); i < numElements; ++i )
+                for( TSize k(0); k < numElements; ++k )
+                {
+                    auto const a = matA[Vec2(i,k)];
+                    for( TSize j(0); j < numElements; ++j )
+                    {
+                            matC[Vec2(i,j)] += a * matB[Vec2(k,j)];
+                    }
+                }
+        }
+    };
+
+
     class GemmAlpakaElementsKernel
     {
     public:
@@ -129,7 +163,7 @@
 
            // std::cout<<"blockIdx="<<gridBlockIdx<<std::endl;
 
-            auto const numWorkElemsPerDim = VecSize::value;
+            constexpr auto numWorkElemsPerDim = VecSize::value;
 
             Vec2 const workSize(
                 numThreads[ 0 ] * numWorkElemsPerDim,
@@ -149,12 +183,8 @@
                 workSize
             );
 
-            using MVecN = mem::MathVec<
-                TElem,
-                VecSize
-            >;
             using MVecNN = mem::MathVec<
-                MVecN,
+                TElem,
                 VecSize
             >;
 
@@ -162,7 +192,7 @@
 
             for( size_t j = 0; j < VecSize::value; ++j )
                 for( size_t i = 0; i < VecSize::value; ++i ){
-                    matDot[j][i] = 0;
+                    matDot[ Vec2(j,i) ] = 0;
                 }
 
             // Loop over all blocks of A and B that are required to compute the C block.
@@ -250,16 +280,11 @@
                         )
                     );
 
-                    for( TSize i(0); i < numWorkElemsPerDim; ++i )
-                        for( TSize k(0); k < numWorkElemsPerDim; ++k )
-                        {
-                            TElem const a = tmpA[Vec2(i,k)];
-                            for( TSize j(0); j < numWorkElemsPerDim; ++j )
-                            {
-                                    matDot[i][j] += a * tmpB[Vec2(k,j)];
-                            }
-                        }
+                    ElementMatMul<VecSize> const elemMatMul;
+
+                    elemMatMul(tmpA,tmpB,matDot);
                 }
+
                 alpaka::block::sync::syncBlockThreads(acc);
 
             }
@@ -276,7 +301,7 @@
                         offsetInA_y + currentThreadInA_y + i,
                         offsetInB_x + currentThreadInB_x + j
                     );
-                    matC[ offsetC ] = alpha * matDot[ i ][ j ] + beta * matC[ offsetC ];
+                    matC[ offsetC ] = alpha * matDot[ Vec2( i, j ) ] + beta * matC[ offsetC ];
 
                 }
             }

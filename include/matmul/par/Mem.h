@@ -109,13 +109,14 @@ template<
 struct Matrix : protected T_PtrStorage
 {
     using PtrStorage = T_PtrStorage;
+    using IndexType = T_IndexType;
     using Value = typename PtrStorage::Value;
     using ValuePtr = typename PtrStorage::ValuePtr;
     using ValueRef = typename PtrStorage::ValueRef;
     using ValueConstRef = typename PtrStorage::ValueConstRef;
     using ThisType = Matrix<
         PtrStorage,
-        T_IndexType,
+        IndexType,
         T_Access
     >;
 
@@ -182,84 +183,39 @@ struct MathVec
         T_Dim
     >;
     static constexpr auto dim = T_Dim::value;
-    using DimIndexType = size_t; //use alpaka trait
 
     // data storage
-    T m_ptr[ dim ];
+    T m_ptr[ dim ][ dim ];
 
     ALPAKA_FN_ACC
     MathVec( )
     { }
 
- /*   template<
-        typename ...T_Args
+    template<
+        typename Vec2
     >
-    ALPAKA_FN_ACC
-    MathVec(
-        T_Args & ...args
-    ) :
-    m_ptr{
-        args...
-    }
-    { }
-*/
     ALPAKA_FN_ACC
     auto
     operator[](
-        DimIndexType const idx
+        Vec2 const & idx
     ) const
     -> T const &
     {
-        return m_ptr[ idx ];
+        return m_ptr[ idx[0] ][ idx[1] ];;
     }
 
+    template<
+        typename Vec2
+    >
     ALPAKA_FN_ACC
     auto
     operator[](
-        DimIndexType const idx
+        Vec2 const & idx
     )
     -> T &
     {
-        return m_ptr[ idx ];
+        return m_ptr[ idx[0] ][ idx[1] ];
     }
-
-    ALPAKA_FN_ACC
-    auto
-    operator*(
-        ThisType const & other
-    )
-    -> ThisType
-    {
-        ThisType tmp;
-        for(size_t j{0};j<dim;++j)
-            tmp[ j ] = m_ptr[ j ] * other[ j ];
-        return tmp;
-    }
-
-    ALPAKA_FN_ACC
-    auto
-    operator+=(
-        ThisType const & other
-    )
-    -> ThisType &
-    {
-        for(size_t j{0};j<dim;++j)
-            m_ptr[ j ] += other[ j ];
-        return *this;
-    }
-
-    ALPAKA_FN_ACC
-    auto
-    operator=(
-        ThisType const & other
-    )
-    -> ThisType &
-    {
-        for(size_t j{0};j<dim;++j)
-            m_ptr[ j ] = other[ j ];
-        return *this;
-    }
-
 };
 
 }
