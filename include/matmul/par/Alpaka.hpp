@@ -91,6 +91,20 @@
     };
 #endif
 
+#ifdef MATMUL_BUILD_PAR_ALPAKA_ACC_CPU_BT_OMP4
+    template<
+        typename... T_Args
+    >
+    struct OptimalVectorSize<
+        alpaka::acc::AccCpuOmp4<
+            T_Args...
+        >
+    >
+    {
+        using type = alpaka::dim::DimInt<16u>;
+    };
+#endif
+
     template<
         typename T_Size
     >
@@ -124,7 +138,7 @@
         }
     };
 
-
+    
     class GemmAlpakaElementsKernel
     {
     public:
@@ -219,8 +233,6 @@
 
             );
 
-
-
             for(TSize blockA_x = 0; blockA_x < nBlocks; ++blockA_x)
             {
                 //TSize const offsetA_x = (blockA_x + gridBlockIdx[1])%numBlocks[1] * workSize[ 1 ];
@@ -242,11 +254,19 @@
                             currentThreadInA_y + i,
                             currentThreadInB_x + j
                         );
+                        Vec2 const globalIdxA(offsetInTile + globalBlockOffsetInA);
+                        Vec2 const globalIdxB(offsetInTile + globalBlockOffsetInB);
 
-                        sharedMatA[ offsetInTile ]= matA[ globalBlockOffsetInA + offsetInTile ];
-                        sharedMatB[ offsetInTile ]= matB[ globalBlockOffsetInB + offsetInTile ];
+                        auto const isValidA = (globalIdxA[0]<matA.m_extent[0]) && (globalIdxA[1]<k);
+                        //printf("%i %i %i %i %i\n",globalIdxA[0],matA.m_extent[0],globalIdxA[1],matA.m_extent[1],isValidA);
+                        auto const isValidB = (globalIdxB[0]<matB.m_extent[0]) && (globalIdxB[1]<n);
+
+                        sharedMatA[ offsetInTile ] = isValidA ? matA[ globalIdxA ] : static_cast<TElem>(0);
+                        sharedMatB[ offsetInTile ] = isValidB ? matB[ globalIdxB ] : static_cast<TElem>(0);
+
                     }
                 }
+
 
                 alpaka::block::sync::syncBlockThreads(acc);
 
@@ -263,6 +283,7 @@
                         k3,
                         currentThreadInB_x
                     );
+
                     Matrix const tmpA(
                         sharedMatA.view(
                             Vec2(
@@ -301,7 +322,10 @@
                         offsetInA_y + currentThreadInA_y + i,
                         offsetInB_x + currentThreadInB_x + j
                     );
-                    matC[ offsetC ] = alpha * matDot[ Vec2( i, j ) ] + beta * matC[ offsetC ];
+                    auto const isValid = (offsetC[0] < matC.m_extent[0]) && (offsetC[1] <  n);
+                  //  printf("%i %i %i %i %i\n",offsetC[0],matC.m_extent[0],offsetC[1],matC.m_extent[1],isValid);
+                    if(isValid)
+                        matC[ offsetC ] = alpha * matDot[ Vec2( i, j ) ] + beta * matC[ offsetC ];
 
                 }
             }
@@ -995,7 +1019,7 @@
             A,
             Vec2(
                 m,
-                k
+                lda
             )
         );
 
@@ -1003,14 +1027,14 @@
             B,
             Vec2(
                 k,
-                n
+                ldb
             )
         );
         Matrix matC(
             C,
             Vec2(
                 m,
-                n
+                ldc
             )
         );
 
