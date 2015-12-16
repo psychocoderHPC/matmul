@@ -33,8 +33,6 @@
     #include <math.h>               // ceil
     #include <type_traits>          // std::is_same
 
-    using VecSize = alpaka::dim::DimInt<16u>;
-
     struct DummyKernel
     {
         template<
@@ -45,6 +43,54 @@
         {
         }
     };
+
+    template<
+        typename T_Acc
+    >
+    struct OptimalVectorSize;
+
+#ifdef MATMUL_BUILD_PAR_ALPAKA_ACC_GPU_CUDA
+    template<
+        typename... T_Args
+    >
+    struct OptimalVectorSize<
+        alpaka::acc::AccGpuCudaRt<
+            T_Args...
+        >
+    >
+    {
+        using type = alpaka::dim::DimInt<2u>;
+    };
+#endif
+
+#ifdef MATMUL_BUILD_PAR_ALPAKA_ACC_CPU_B_SEQ_T_OMP2
+    template<
+        typename... T_Args
+    >
+    struct OptimalVectorSize<
+        alpaka::acc::AccCpuOmp2Threads<
+            T_Args...
+        >
+    >
+    {
+        using type = alpaka::dim::DimInt<16u>;
+    };
+#endif
+
+#ifdef  MATMUL_BUILD_PAR_ALPAKA_ACC_CPU_B_OMP2_T_SEQ
+    template<
+        typename... T_Args
+    >
+    struct OptimalVectorSize<
+        alpaka::acc::AccCpuOmp2Blocks<
+            T_Args...
+        >
+    >
+    {
+        using type = alpaka::dim::DimInt<16u>;
+    };
+#endif
+
     class GemmAlpakaElementsKernel
     {
     public:
@@ -65,9 +111,14 @@
             MatC matC, TSize const & ldc) const
         -> void
         {
+            using Dim2 = alpaka::dim::DimInt<2u>;
+            using Vec2 = alpaka::Vec<Dim2, TSize>;
+
+            using VecSize = typename OptimalVectorSize<TAcc>::type;
 
             using Matrix = mem::Matrix<
-                TElem
+                mem2::ConstPtrValue<TElem>,
+                Vec2
             >;
 
             auto const numBlocks(alpaka::workdiv::getWorkDiv<alpaka::Grid, alpaka::Blocks>(acc));
@@ -80,7 +131,7 @@
 
             auto const numWorkElemsPerDim = VecSize::value;
 
-            mem::Vec2 const workSize(
+            Vec2 const workSize(
                 numThreads[ 0 ] * numWorkElemsPerDim,
                 numThreads[ 1 ] * numWorkElemsPerDim
             );
@@ -90,7 +141,7 @@
             TElem * const sharedBasePointerB(sharedBasePointer + workSize[0] * workSize[1]);
             Matrix sharedMatA(
                 sharedBasePointer,
-                 workSize
+                workSize
             );
 
             Matrix sharedMatB(
@@ -144,11 +195,11 @@
             {
                 //TSize const offsetA_x = (blockA_x + gridBlockIdx[1])%numBlocks[1] * workSize[ 1 ];
                 TSize const offsetA_x = blockA_x * workSize[ 1 ];
-                mem::Vec2 const globalBlockOffsetInA(
+                Vec2 const globalBlockOffsetInA(
                     offsetInA_y,
                     offsetA_x
                 );
-                mem::Vec2 const globalBlockOffsetInB(
+                Vec2 const globalBlockOffsetInB(
                     offsetA_x,
                     offsetInB_x
                 );
@@ -157,7 +208,7 @@
                 {
                     for( TSize j(0); j < numWorkElemsPerDim; ++j )
                     {
-                        mem::Vec2 const offsetInTile(
+                        Vec2 const offsetInTile(
                             currentThreadInA_y + i,
                             currentThreadInB_x + j
                         );
@@ -174,17 +225,17 @@
                 for( TSize k3 = 0; k3 < workSize[ 0 ]; k3 +=numWorkElemsPerDim )
                 {
 
-                    mem::Vec2 const globalIdx_A(
+                    Vec2 const globalIdx_A(
                         currentThreadInA_y,
                         k3
                     );
-                    mem::Vec2 const globalIdx_B(
+                    Vec2 const globalIdx_B(
                         k3,
                         currentThreadInB_x
                     );
                     Matrix const tmpA(
                         sharedMatA.view(
-                            mem::Vec2(
+                            Vec2(
                                 globalIdx_A[ 0 ],
                                 globalIdx_A[ 1 ]
                             )
@@ -192,7 +243,7 @@
                     );
                     Matrix const tmpB(
                         sharedMatB.view(
-                            mem::Vec2(
+                            Vec2(
                                 globalIdx_B[ 0 ],
                                 globalIdx_B[ 1 ]
                             )
@@ -202,10 +253,10 @@
                     for( TSize i(0); i < numWorkElemsPerDim; ++i )
                         for( TSize k(0); k < numWorkElemsPerDim; ++k )
                         {
-                            TElem const a = tmpA[mem::Vec2(i,k)];
+                            TElem const a = tmpA[Vec2(i,k)];
                             for( TSize j(0); j < numWorkElemsPerDim; ++j )
                             {
-                                    matDot[i][j] += a * tmpB[mem::Vec2(k,j)];
+                                    matDot[i][j] += a * tmpB[Vec2(k,j)];
                             }
                         }
                 }
@@ -221,7 +272,7 @@
             {
                 for( TSize j(0); j < numWorkElemsPerDim; ++j )
                 {
-                    mem::Vec2 const offsetC(
+                    Vec2 const offsetC(
                         offsetInA_y + currentThreadInA_y + i,
                         offsetInB_x + currentThreadInB_x + j
                     );
@@ -864,6 +915,8 @@
         using Dim2 = alpaka::dim::DimInt<2u>;
         using Dim3 = alpaka::dim::DimInt<3u>;
 
+        using Vec2 = alpaka::Vec<Dim2, TSize>;
+
 
         if(matmul_mat_gemm_early_out(m, n, k, alpha, beta))
         {
@@ -883,8 +936,9 @@
             n);
 
         alpaka::Vec<Dim2, TSize> const elemExtent(
-            static_cast<TSize>(VecSize::value),
-            static_cast<TSize>(VecSize::value));
+            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value),
+            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value)
+        );
         /*
         alpaka::Vec<Dim2, TSize> const elemExtent(
             static_cast<TSize>(1),
@@ -903,27 +957,33 @@
         TKernelFnObj kernel;
 
         using Matrix = mem::Matrix<
-            TElem
+            mem2::ConstPtrValue<TElem>,
+            Vec2
         >;
 
-        Matrix const matA(
+        using ConstMatrix = mem::Matrix<
+            mem2::ConstPtrConstValue<TElem>,
+            Vec2
+        >;
+
+        ConstMatrix const matA(
             A,
-            mem::Vec2(
+            Vec2(
                 m,
                 k
             )
         );
 
-        Matrix const matB(
+        ConstMatrix const matB(
             B,
-            mem::Vec2(
+            Vec2(
                 k,
                 n
             )
         );
         Matrix matC(
             C,
-            mem::Vec2(
+            Vec2(
                 m,
                 n
             )

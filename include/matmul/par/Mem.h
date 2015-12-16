@@ -3,34 +3,31 @@
 
 #include <alpaka/alpaka.hpp>
 
-namespace mem
-{
-
-using IndexType = size_t;
-using Dim2 = alpaka::dim::DimInt<2u>;
-using Vec2 = alpaka::Vec<Dim2,IndexType>;
-}
 
 namespace mem2
 {
-using namespace mem;
 
 template<
     typename T
 >
 struct IdentityAccess
 {
+
+    template<
+        typename T_IndexType
+    >
     ALPAKA_FN_ACC
     auto
     operator()(
-        Vec2 const & extent,
-        Vec2 const & idx
+        T_IndexType const & extent,
+        T_IndexType const & idx
     ) const
-    -> IndexType const
+    -> alpaka::size::Size<T_IndexType> const
     {
-        IndexType const col( idx[ 1 ] );
-        IndexType const pitch( extent[ 1 ] );
-        IndexType const row( pitch * idx[ 0 ] );
+        using LinearIndexType = alpaka::size::Size<T_IndexType>;
+        LinearIndexType const col( idx[ 1 ] );
+        LinearIndexType const pitch( extent[ 1 ] );
+        LinearIndexType const row( pitch * idx[ 0 ] );
         return row + col;
     }
 };
@@ -40,96 +37,138 @@ template<
 >
 struct TransposeAccess
 {
+
+    template<
+        typename T_IndexType
+    >
     ALPAKA_FN_ACC
     auto
     operator()(
-        Vec2 const & extent,
-        Vec2 const & idx
+        T_IndexType const & extent,
+        T_IndexType const & idx
     ) const
-    -> IndexType const
+    -> alpaka::size::Size<T_IndexType> const
     {
-        IndexType const col( idx[ 0 ] );
-        IndexType const pitch( extent[ 1 ] );
-        IndexType const row( pitch * idx[ 1 ] );
+        using LinearIndexType = alpaka::size::Size<T_IndexType>;
+        LinearIndexType const col( idx[ 0 ] );
+        LinearIndexType const pitch( extent[ 1 ] );
+        LinearIndexType const row( pitch * idx[ 1 ] );
         return row + col;
     }
 };
 
-}
+
+template<
+    typename T
+>
+struct ConstPtrConstValue
+{
+    using Value = T;
+    using ValuePtr = T const * const;
+    using ValueRef = T const &;
+    using ValueConstRef = T const &;
+
+    ALPAKA_FN_HOST_ACC
+    ConstPtrConstValue(
+        ValuePtr ptr
+    ) : m_ptr(ptr)
+    { }
+
+    ValuePtr m_ptr;
+};
+
+template<
+    typename T
+>
+struct ConstPtrValue
+{
+    using Value = T;
+    using ValuePtr = T * const;
+    using ValueRef = T &;
+    using ValueConstRef = T const &;
+
+    ALPAKA_FN_HOST_ACC
+    ConstPtrValue(
+        ValuePtr ptr
+    ) : m_ptr(ptr)
+    { }
+
+    ValuePtr m_ptr;
+};
+
+} //namepsace mem2
 
 namespace mem
 {
+
 template<
-    typename T,
-    template <typename> class T_Access = mem2::IdentityAccess
+    typename T_PtrStorage,
+    typename T_IndexType,
+    typename T_Access = mem2::IdentityAccess< typename T_PtrStorage::Value >
 >
-struct Matrix
+struct Matrix : protected T_PtrStorage
 {
-    using Access = const T_Access<T>;
+    using PtrStorage = T_PtrStorage;
+    using Value = typename PtrStorage::Value;
+    using ValuePtr = typename PtrStorage::ValuePtr;
+    using ValueRef = typename PtrStorage::ValueRef;
+    using ValueConstRef = typename PtrStorage::ValueConstRef;
     using ThisType = Matrix<
-        T,
+        PtrStorage,
+        T_IndexType,
         T_Access
     >;
 
-    ALPAKA_FN_ACC
+    using Access = const T_Access;
+
+
+    ALPAKA_FN_HOST_ACC
     Matrix(
-        T * const ptr,
-        Vec2 const & extent
+        ValuePtr ptr,
+        T_IndexType const & extent
     ) :
-        m_ptr(ptr),
+        PtrStorage( ptr ),
         m_extent(extent)
     {
     }
 
-    ALPAKA_FN_ACC
-    Matrix(
-        const T * const ptr,
-        Vec2 const & extent
-    ) :
-        m_ptr( const_cast<T*>( ptr ) ),
-        m_extent(extent)
-    {
-    }
-
-    ALPAKA_FN_ACC
+    ALPAKA_FN_HOST_ACC
     auto
     operator[](
-        Vec2 const & idx
+        T_IndexType const & idx
     )
-    -> T &
+    -> ValueRef
     {
-        const IndexType linearIndex( Access( )( m_extent, idx ) );
-        return m_ptr[ linearIndex ];
+        auto const linearIndex( Access( )( m_extent, idx ) );
+        return this->m_ptr[ linearIndex ];
     }
 
     ALPAKA_FN_ACC
     auto
     operator[](
-        Vec2 const & idx
+        T_IndexType const & idx
     ) const
-    -> T const &
+    -> ValueConstRef
     {
-        const IndexType linearIndex( Access( )( m_extent, idx ) );
-        return m_ptr[ linearIndex ];
+        auto const linearIndex( Access( )( m_extent, idx ) );
+        return this->m_ptr[ linearIndex ];
     }
 
-    ALPAKA_FN_ACC
+    ALPAKA_FN_HOST_ACC
     auto
     view(
-        Vec2 const & offset
+        T_IndexType const & offset
     ) const
     -> ThisType
     {
+        auto const linearIndex( Access( )( m_extent, offset ) );
         return ThisType(
-            &(*this).operator[](
-                offset
-            ),
+            static_cast<ValuePtr>(this->m_ptr +  linearIndex ),
             m_extent
         );
     }
 
-    T * const m_ptr;
-    Vec2 const m_extent;
+    T_IndexType const m_extent;
 };
 
 template<
