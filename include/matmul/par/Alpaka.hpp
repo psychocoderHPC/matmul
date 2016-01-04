@@ -138,7 +138,7 @@
         }
     };
 
-    
+
     class GemmAlpakaElementsKernel
     {
     public:
@@ -330,6 +330,47 @@
                 }
             }
 
+        }
+    };
+
+    class GemmAlpakaOmpNative
+    {
+    public:
+        ALPAKA_NO_HOST_ACC_WARNING
+        template<
+            typename TAcc,
+            typename TElem>
+        ALPAKA_FN_ACC auto operator()(
+            TAcc const & acc,
+            TSize const & m, TSize const & n, TSize const & k,
+            TElem const & alpha,
+            TElem const * const MATMUL_RESTRICT A, TSize const & lda,
+            TElem const * const MATMUL_RESTRICT B, TSize const & ldb,
+            TElem const & beta,
+            TElem * const MATMUL_RESTRICT C, TSize const & ldc) const
+        -> void
+        {
+            auto const gridThreadIdx(alpaka::idx::getIdx<alpaka::Grid, alpaka::Threads>(acc));
+            TSize const i(gridThreadIdx[0u]);
+            /*TSize const gThreadIdX(gridThreadIdx[1u]);
+            TSize const i = gThreadIdY * alpaka::workdiv::getWorkDiv<alpaka::Grid, alpaka::Threads>(acc)[1] + gThreadIdX;
+             * */
+
+            if(i>=n) return;
+
+            for(TSize j = 0; j < n; ++j)
+            {
+                C[i*ldc + j] *= beta;
+            }
+            for(TSize k2 = 0; k2 < k; ++k2)
+            {
+                TElem const a = alpha * A[i*lda + k2];
+
+                for(TSize j = 0; j < n; ++j)
+                {
+                    C[i*ldc + j] += a * B[k2*ldb + j];
+                }
+            }
         }
     };
     //#############################################################################
@@ -663,7 +704,7 @@
                 template<
                     typename TAcc>
                 struct BlockSharedExternMemSizeBytes<
-                    GemmAlpakaElementsKernel,
+                    GemmAlpakaOmpNative,
                     TAcc>
                 {
                     //-----------------------------------------------------------------------------
@@ -707,7 +748,7 @@
                         boost::ignore_unused(ldc);
 
                         // Reserve the buffer for the two blocks of A and B.
-                        return 2u * vblockThreadsExtents.prod() * sizeof(TElem);
+                        return 0; //2u * vblockThreadsExtents.prod() * sizeof(TElem);
                     }
                 };
 
@@ -980,13 +1021,12 @@
         Stream<alpaka::dev::Dev<TAcc>> stream(devAcc);
 
         // Result matrix is MxN. We create one worker per result matrix cell.
-        alpaka::Vec<Dim2, TSize> const v2uiExtentsC(
-            m,
-            n);
+        alpaka::Vec<Dim1, TSize> const v2uiExtentsC(
+            m
+        );
 
-        alpaka::Vec<Dim2, TSize> const elemExtent(
-            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value),
-            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value)
+        alpaka::Vec<Dim1, TSize> const elemExtent(
+            static_cast<TSize>(1)
         );
         /*
         alpaka::Vec<Dim2, TSize> const elemExtent(
@@ -994,7 +1034,7 @@
             static_cast<TSize>(1));
          */
         // Let alpaka calculate good block and grid sizes given our full problem extents.
-        alpaka::workdiv::WorkDivMembers<Dim2, TSize> const workDiv(
+        alpaka::workdiv::WorkDivMembers<Dim1, TSize> const workDiv(
             alpaka::workdiv::getValidWorkDiv<TAcc>(
                 devAcc,
                 v2uiExtentsC,
@@ -1005,7 +1045,7 @@
         // Create an instance of the kernel functor.
         TKernelFnObj kernel;
 
-        using Matrix = mem::Matrix<
+   /*     using Matrix = mem::Matrix<
             mem2::ConstPtrValue<TElem>,
             Vec2
         >;
@@ -1036,7 +1076,7 @@
                 m,
                 ldc
             )
-        );
+        );*/
 
         auto const execDummy(
             alpaka::exec::create<TAcc>(
@@ -1057,12 +1097,12 @@
             n,
             k,
             alpha,
-            matA,
+            reinterpret_cast<TElem const *>(A),
             lda,
-            matB,
+            reinterpret_cast<TElem const *>(B),
             ldb,
             beta,
-            matC,
+            reinterpret_cast<TElem *>(C),
             ldc));
 
         MATMUL_TIME_START;
@@ -1124,10 +1164,13 @@
             m,
             n);
 
-        alpaka::Vec<Dim2, TSize> const elemExtent(
-            static_cast<TSize>(2),
-            static_cast<TSize>(2));
+        alpaka::Vec<Dim1, TSize> const v2uiExtentsC2(
+            m
+        );
 
+        alpaka::Vec<Dim1, TSize> const elemExtent(
+            static_cast<TSize>(1)
+        );
 
         // Wrap the Pointers into memory buffer objects.
         using BufWrapperIn = alpaka::mem::view::ViewPlainPtr<
@@ -1135,14 +1178,14 @@
             TElem const,
             alpaka::dim::DimInt<2u>,
             TSize>;
-        BufWrapperIn bufAHost(A, devHost, v2uiExtentsA, lda);
-        BufWrapperIn bufBHost(B, devHost, v2uiExtentsB, ldb);
+        BufWrapperIn bufAHost(A, devHost, v2uiExtentsA, lda * sizeof(TElem));
+        BufWrapperIn bufBHost(B, devHost, v2uiExtentsB, ldb * sizeof(TElem));
         using BufWrapperOut = alpaka::mem::view::ViewPlainPtr<
             std::decay<decltype(devHost)>::type,
             TElem,
             alpaka::dim::DimInt<2u>,
             TSize>;
-        BufWrapperOut bufCHost(C, devHost, v2uiExtentsC, ldc);
+        BufWrapperOut bufCHost(C, devHost, v2uiExtentsC, ldc * sizeof(TElem));
 
         // Allocate the buffers on the accelerator and copy Host -> Acc.
         // TODO: Test if interleaved is better then alloc first, copy later.
@@ -1154,18 +1197,18 @@
         auto bufCAcc(alpaka::mem::buf::alloc<TElem, TSize>(devAcc, v2uiExtentsC));
         alpaka::mem::view::copy(stream, bufCAcc, bufCHost, v2uiExtentsC);
 
+        alpaka::Vec<Dim1, TSize> const M(m);
         // Let alpaka calculate good block and grid sizes given our full problem extents.
-        alpaka::workdiv::WorkDivMembers<Dim2, TSize> const workDiv(
+        alpaka::workdiv::WorkDivMembers<Dim1, TSize> const workDiv(
             alpaka::workdiv::getValidWorkDiv<TAcc>(
                 devAcc,
-                v2uiExtentsC,
+                v2uiExtentsC2,
                 elemExtent,
                 false,
                 alpaka::workdiv::GridBlockExtentSubDivRestrictions::EqualExtent));
 
         // Create an instance of the kernel functor.
         TKernelFnObj kernel;
-
         // Create the executor.
         // NOTE: We remove the __restrict__ because alpaka calls std::ref on the arguments and std::ref errors.
         // This is most probably undefined. MSVC compiles it without any warning.
@@ -1176,14 +1219,15 @@
             n,
             k,
             alpha,
-            reinterpret_cast<TElem const *>(A),
-            lda,
-            reinterpret_cast<TElem const *>(B),
-            ldb,
+            reinterpret_cast<TElem const *>(alpaka::mem::view::getPtrNative(bufAAcc)),
+            alpaka::mem::view::getPitchBytes<1>(bufAAcc)/sizeof(TElem),
+            reinterpret_cast<TElem const *>(alpaka::mem::view::getPtrNative(bufBAcc)),
+            alpaka::mem::view::getPitchBytes<1>(bufBAcc)/sizeof(TElem),
             beta,
-            reinterpret_cast<TElem *>(C),
-            ldc));
+            reinterpret_cast<TElem *>(alpaka::mem::view::getPtrNative(bufCAcc)),
+            alpaka::mem::view::getPitchBytes<1>(bufCAcc)/sizeof(TElem)));
 
+        alpaka::wait::wait(stream);
         MATMUL_TIME_START;
 
         // Execute the kernel.

@@ -71,7 +71,7 @@
 
             return
                 // matmul_gemm_par_alpaka<alpaka::acc::AccCpuOmp2Blocks<alpaka::dim::DimInt<2u>, TSize>, GemmAlpakaNoShared2Kernel>(
-                matmul_gemm_par_alpaka<alpaka::acc::AccCpuOmp2Blocks<alpaka::dim::DimInt<2u>, TSize>, GemmAlpakaElementsKernel>(                                
+                matmul_gemm_par_alpaka<alpaka::acc::AccCpuOmp2Blocks<alpaka::dim::DimInt<1u>, TSize>, GemmAlpakaOmpNative>(                                
                     m, n, k,
                     alpha,
                     A, lda,
@@ -99,7 +99,7 @@
 
             return
                 
-                matmul_gemm_par_alpaka<alpaka::acc::AccCpuOmp2Threads<alpaka::dim::DimInt<2u>, TSize>, GemmAlpakaElementsKernel>(
+                matmul_gemm_par_alpaka<alpaka::acc::AccCpuOmp2Threads<alpaka::dim::DimInt<1u>, TSize>, GemmAlpakaOmpNative>(
                 //matmul_gemm_par_alpaka<alpaka::acc::AccCpuOmp2Threads<alpaka::dim::DimInt<2u>, TSize>, GemmAlpakaNoShared2Kernel>(
                     m, n, k,
                     alpha,
