@@ -138,7 +138,7 @@
         }
     };
 
-    
+
     class GemmAlpakaElementsKernel
     {
     public:
@@ -1096,6 +1096,8 @@
         using Dim2 = alpaka::dim::DimInt<2u>;
         using Dim3 = alpaka::dim::DimInt<3u>;
 
+        using Vec2 = alpaka::Vec<Dim2, TSize>;
+
         if(matmul_mat_gemm_early_out(m, n, k, alpha, beta))
         {
             MATMUL_TIME_RETURN_EARLY_OUT;
@@ -1125,8 +1127,9 @@
             n);
 
         alpaka::Vec<Dim2, TSize> const elemExtent(
-            static_cast<TSize>(2),
-            static_cast<TSize>(2));
+            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value),
+            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value)
+        );
 
 
         // Wrap the Pointers into memory buffer objects.
@@ -1135,14 +1138,14 @@
             TElem const,
             alpaka::dim::DimInt<2u>,
             TSize>;
-        BufWrapperIn bufAHost(A, devHost, v2uiExtentsA, lda);
-        BufWrapperIn bufBHost(B, devHost, v2uiExtentsB, ldb);
+        BufWrapperIn bufAHost(A, devHost, v2uiExtentsA, lda * sizeof(TElem));
+        BufWrapperIn bufBHost(B, devHost, v2uiExtentsB, ldb * sizeof(TElem));
         using BufWrapperOut = alpaka::mem::view::ViewPlainPtr<
             std::decay<decltype(devHost)>::type,
             TElem,
             alpaka::dim::DimInt<2u>,
             TSize>;
-        BufWrapperOut bufCHost(C, devHost, v2uiExtentsC, ldc);
+        BufWrapperOut bufCHost(C, devHost, v2uiExtentsC, ldc * sizeof(TElem));
 
         // Allocate the buffers on the accelerator and copy Host -> Acc.
         // TODO: Test if interleaved is better then alloc first, copy later.
@@ -1163,6 +1166,49 @@
                 false,
                 alpaka::workdiv::GridBlockExtentSubDivRestrictions::EqualExtent));
 
+        using Matrix = mem::Matrix<
+            mem2::ConstPtrValue<TElem>,
+            Vec2
+        >;
+
+        using ConstMatrix = mem::Matrix<
+            mem2::ConstPtrConstValue<TElem>,
+            Vec2
+        >;
+
+        ConstMatrix const matA(
+            alpaka::mem::view::getPtrNative(bufAAcc),
+            Vec2(
+                m,
+                alpaka::mem::view::getPitchBytes<1>(bufAAcc) / sizeof(TElem)
+            )
+        );
+
+        ConstMatrix const matB(
+            alpaka::mem::view::getPtrNative(bufBAcc),
+            Vec2(
+                k,
+                alpaka::mem::view::getPitchBytes<1>(bufBAcc) / sizeof(TElem)
+            )
+        );
+        Matrix matC(
+            alpaka::mem::view::getPtrNative(bufCAcc),
+            Vec2(
+                m,
+                alpaka::mem::view::getPitchBytes<1>(bufCAcc) / sizeof(TElem)
+            )
+        );
+
+        auto const execDummy(
+            alpaka::exec::create<TAcc>(
+                workDiv,
+                DummyKernel()
+            )
+        );
+        alpaka::stream::enqueue(stream, execDummy);
+        alpaka::wait::wait(stream);
+
+
         // Create an instance of the kernel functor.
         TKernelFnObj kernel;
 
@@ -1176,14 +1222,15 @@
             n,
             k,
             alpha,
-            reinterpret_cast<TElem const *>(A),
+            matA,
             lda,
-            reinterpret_cast<TElem const *>(B),
+            matB,
             ldb,
             beta,
-            reinterpret_cast<TElem *>(C),
+            matC,
             ldc));
 
+        alpaka::wait::wait(stream);
         MATMUL_TIME_START;
 
         // Execute the kernel.

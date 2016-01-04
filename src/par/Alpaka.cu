@@ -58,7 +58,7 @@
         TElem * const MATMUL_RESTRICT C, TSize const ldc)
     {
         return
-            matmul_gemm_par_alpaka_memcpy<alpaka::acc::AccGpuCudaRt<alpaka::dim::DimInt<2u>, TSize>, GemmAlpakaSharedKernel>(
+            matmul_gemm_par_alpaka_memcpy<alpaka::acc::AccGpuCudaRt<alpaka::dim::DimInt<2u>, TSize>, GemmAlpakaElementsKernel>(
                 m, n, k,
                 alpha,
                 A, lda,
