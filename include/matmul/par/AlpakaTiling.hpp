@@ -135,37 +135,18 @@
         operator()(
             MatA const & matA,
             MatB const & matB,
-            MatC & matC
+            MatC* matC,
+            size_t const jumpLength,
+            size_t const results
         ) const
         {
             using Vec2 = typename MatA::IndexType;
-            constexpr auto numElements = T_Size::value;
+
             VECTOR_PRAGMA
-            for( TSize i(0); i < numElements; ++i )
+            for( TSize j(0); j < results; ++j )
             {
-                TElem* lineC = const_cast<TElem*>(&(matC[Vec2(i,0)]));
-                //auto lineC = &(matC[Vec2(i,0)]);
-                VECTOR_PRAGMA
-                for( TSize k(0); k < numElements; ++k )
-                {
-                    TElem const a = matA[Vec2(i,k)];
-                    //auto const a = matA[Vec2(i,k)];
-                    TElem* lineB = const_cast<TElem*>(&(matB[Vec2(k,0)]));
-                    //auto lineB = &(matB[Vec2(k,0)]);
-#ifdef __INTEL_COMPILER
-                    __assume_aligned(lineC,64);// <- notwendig?
-                    __assume_aligned(lineB,64);
-#elif __GNUG__!=0 && __NVCC__==0
-                    lineC = (decltype(lineC))__builtin_assume_aligned(lineC,64);// <- notwendig?
-                    lineB = (decltype(lineB))__builtin_assume_aligned(lineB,64);
-#endif
-                    VECTOR_PRAGMA
-                    for( TSize j(0); j < numElements; ++j )
-                    {
-                            //matC[Vec2(i,j)] += a * matB[Vec2(k,j)];
-                            lineC[j] += a * lineB[j];
-                    }
-                }
+                    //matC[Vec2(i,j)] += a * matB[Vec2(k,j)];
+                    matC[j] += matB * matA[Vec2(j*jumpLength,0)];
             }
         }
     };
@@ -220,6 +201,22 @@
                 numThreads[ 1 ] * numWorkElemsPerDim
             );
 
+            size_t const linearThreadIdx = alpaka::idx::mapIdx<1u>(
+                blockThreadIdx,
+                numThreads
+            )[0];
+
+            size_t const linerThreadCount = numThreads[0] * numThreads[1];
+
+            size_t const linearWorkSize = workSize[0] * workSize[1];
+
+            Vec2 threadIndex(
+                linearThreadIdx / workSize[0],
+                linearThreadIdx % workSize[1]
+            );
+
+            size_t const jumpLength = linerThreadCount / workSize[1];
+
             //Shared alpakaHelperory used to store the current blocks of A and B.
             TElem * const sharedBasePointer(alpaka::block::shared::dyn::getMem<TElem>(acc));
             TElem * const sharedBasePointerB(sharedBasePointer + workSize[0] * workSize[1]);
@@ -239,15 +236,11 @@
                 VecSize
             >;
 
-            MVecNN matDot;
+            TElem matDot[numWorkElemsPerDim*numWorkElemsPerDim];
             VECTOR_PRAGMA
-            for(TSize j(0); j < static_cast<TSize>(VecSize::value); ++j)
+            for(TSize j(0); j < numWorkElemsPerDim*numWorkElemsPerDim; ++j)
             {
-                VECTOR_PRAGMA
-                for(TSize i(0); i < static_cast<TSize>(VecSize::value); ++i)
-                {
-                    matDot[ Vec2(j,i) ] = 0;
-                }
+                matDot[j] = 0;
             }
 
             // Loop over all blocks of A and B that are required to compute the C block.
@@ -264,8 +257,6 @@
 
             TSize const currentThreadInA_y( blockThreadIdx[ 0 ] * numWorkElemsPerDim);
             TSize const currentThreadInB_x( blockThreadIdx[ 1 ] * numWorkElemsPerDim);
-            TSize const currentThreadInA_y_2( blockThreadIdx[ 0 ]);
-            TSize const currentThreadInB_x_2( blockThreadIdx[ 1 ]);
             // needs architecture based mapping
             TSize const offsetInA_y(
                 gridBlockIdx[ 0 ] * workSize[ 0 ]
@@ -291,32 +282,28 @@
 #if REAL_SHARED_MEMORY == 1
                 //load shared A & B
                 VECTOR_PRAGMA
-                for( TSize i(0); i < numWorkElemsPerDim; ++i )
+                for( TSize i(0); i < numWorkElemsPerDim * numWorkElemsPerDim; ++i )
                 {
-                    auto offsetInTile_Y = currentThreadInA_y_2 + i * numThreads[0];
+                    auto offsetInTile_Y = threadIndex[0] + i * jumpLength;
                     auto lineSharedA = &(sharedMatA.m_ptr[offsetInTile_Y * sharedMatA.m_extent[1]]);
                     auto lineSharedB = &(sharedMatB.m_ptr[offsetInTile_Y * sharedMatB.m_extent[1]]);
                     auto lineMatA = &(matA.m_ptr[(offsetInTile_Y + offsetInA_y) * matA.m_extent[1]]);
                     auto lineMatB = &(matB.m_ptr[(offsetInTile_Y + offsetA_x) * matB.m_extent[1]]);
-                    VECTOR_PRAGMA
-                    for( TSize j(0); j < numWorkElemsPerDim; ++j )
-                    {
-                        Vec2 const offsetInTile(
-                            offsetInTile_Y,
-                            currentThreadInB_x_2 + j * numThreads[1]
-                        );
-                        Vec2 const globalIdxA(offsetInTile + globalBlockOffsetInA);
-                        Vec2 const globalIdxB(offsetInTile + globalBlockOffsetInB);
+                    Vec2 const offsetInTile(
+                        offsetInTile_Y,
+                        threadIndex[1]
+                    );
+                    Vec2 const globalIdxA(offsetInTile + globalBlockOffsetInA);
+                    Vec2 const globalIdxB(offsetInTile + globalBlockOffsetInB);
 
-                        auto const isValidA = (globalIdxA[0]<matA.m_extent[0]) && (globalIdxA[1]<k);
-                        auto const isValidB = (globalIdxB[0]<matB.m_extent[0]) && (globalIdxB[1]<n);
+                    auto const isValidA = (globalIdxA[0]<matA.m_extent[0]) && (globalIdxA[1]<k);
+                    auto const isValidB = (globalIdxB[0]<matB.m_extent[0]) && (globalIdxB[1]<n);
 
-                        //sharedMatA[ offsetInTile ] = isValidA ? matA[ globalIdxA ] : static_cast<TElem>(0);
-                        //sharedMatB[ offsetInTile ] = isValidB ? matB[ globalIdxB ] : static_cast<TElem>(0);
-                        lineSharedA[offsetInTile[1]] = isValidA ? lineMatA[ globalIdxA[1] ] : static_cast<TElem>(0);
-                        lineSharedB[offsetInTile[1]] = isValidB ? lineMatB[ globalIdxB[1] ] : static_cast<TElem>(0);
+                    //sharedMatA[ offsetInTile ] = isValidA ? matA[ globalIdxA ] : static_cast<TElem>(0);
+                    //sharedMatB[ offsetInTile ] = isValidB ? matB[ globalIdxB ] : static_cast<TElem>(0);
+                    lineSharedA[offsetInTile[1]] = isValidA ? lineMatA[ globalIdxA[1] ] : static_cast<TElem>(0);
+                    lineSharedB[offsetInTile[1]] = isValidB ? lineMatB[ globalIdxB[1] ] : static_cast<TElem>(0);
 
-                    }
                 }
                 alpaka::block::sync::syncBlockThreads(acc);
 #else
@@ -329,67 +316,57 @@
                 );
 #endif
                 // move over line in A workSize
-                VECTOR_PRAGMA
-                for(TSize k3(0); k3 < workSize[ 0 ]; k3 += numWorkElemsPerDim)
+                // move over line in A workSize
+                for(TSize k3(0); k3 < workSize[ 1 ]; ++k3)
                 {
-                    using L1VecSize = alpaka::dim::DimInt<numWorkElemsPerDim/OMP_DIVISOR>;
-                    VECTOR_PRAGMA
-                    for (int li = 0; li < OMP_DIVISOR; ++li)
-                        VECTOR_PRAGMA
-                        for (int lj = 0; lj < OMP_DIVISOR; ++lj)
-                        {
-                            Vec2 const globalIdx_Dot(
-                                li * L1VecSize::value,
-                                lj * L1VecSize::value
-                            );
-                            Matrix tmpDot(
-                                matDot.view(globalIdx_Dot)
-                            );
 
-                            for (TSize k4(0); k4 < OMP_DIVISOR; ++k4 )
-                            {
-                                Vec2 const globalIdx_A(
-                                    currentThreadInA_y + li * L1VecSize::value,
-                                    k3 + k4 * L1VecSize::value
-                                );
-                                Vec2 const globalIdx_B(
-                                    k3 + k4 * L1VecSize::value,
-                                    currentThreadInB_x + lj * L1VecSize::value
-                                );
+                    Vec2 const globalIdx_A(
+                        threadIndex[0],
+                        k3
+                    );
+                    Vec2 const globalIdx_B(
+                        k3,
+                        threadIndex[1]
+                    );
 
-                                decltype(sharedMatA) const tmpA(
-                                    sharedMatA.view(globalIdx_A)
-                                );
-                                decltype(sharedMatB) const tmpB(
-                                    sharedMatB.view(globalIdx_B)
-                                );
+                    Matrix const tmpA(
+                        sharedMatA.view(
+                            Vec2(
+                                globalIdx_A[ 0 ],
+                                globalIdx_A[ 1 ]
+                            )
+                        )
+                    );
+                    Matrix const tmpB(
+                        sharedMatB.view(
+                            Vec2(
+                                globalIdx_B[ 0 ],
+                                globalIdx_B[ 1 ]
+                            )
+                        )
+                    );
 
-                                ElementMatMul<L1VecSize> const elemMatMul;
+                    ElementMatMul<VecSize> const elemMatMul;
 
-                                elemMatMul(tmpA,tmpB,tmpDot);
-                            }
-                        }
-                    }
+                    elemMatMul(tmpA,tmpB[Vec2(size_t(0),size_t(0))],matDot,jumpLength,numWorkElemsPerDim*numWorkElemsPerDim);
+                }
                 alpaka::block::sync::syncBlockThreads(acc);
 
             }
-            VECTOR_PRAGMA
-            for(TSize i(0); i < numWorkElemsPerDim; ++i)
-            {
+
                 VECTOR_PRAGMA
-                for(TSize j(0); j < numWorkElemsPerDim; ++j)
+                for(TSize j(0); j < numWorkElemsPerDim*numWorkElemsPerDim; ++j)
                 {
                     Vec2 const offsetC(
-                        offsetInA_y + currentThreadInA_y + i,
-                        offsetInB_x + currentThreadInB_x + j
+                        offsetInA_y + threadIndex[0] + j * jumpLength,
+                        offsetInB_x + threadIndex[1]
                     );
                     auto const isValid = (offsetC[0] < matC.m_extent[0]) && (offsetC[1] <  n);
 
                     if(isValid)
-                        matC[ offsetC ] = alpha * matDot[ Vec2( i, j ) ] + beta * matC[ offsetC ];
+                        matC[ offsetC ] = alpha * matDot[ j ] + beta * matC[ offsetC ];
 
                 }
-            }
 
         }
     };
