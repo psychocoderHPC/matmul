@@ -188,7 +188,6 @@
                 Vec2
             >;
 
-            auto const numBlocks(alpaka::workdiv::getWorkDiv<alpaka::Grid, alpaka::Blocks>(acc));
             auto const numThreads(alpaka::workdiv::getWorkDiv<alpaka::Block, alpaka::Threads>(acc));
 
             auto const gridBlockIdx(alpaka::idx::getIdx<alpaka::Grid, alpaka::Blocks>(acc));
@@ -346,9 +345,17 @@
                         )
                     );
 
-                    ElementMatMul<VecSize> const elemMatMul;
+                    auto const bValue = tmpB[Vec2(size_t(0),size_t(0))];
 
-                    elemMatMul(tmpA,tmpB[Vec2(size_t(0),size_t(0))],matDot,jumpLength,numWorkElemsPerDim*numWorkElemsPerDim);
+                   // ElementMatMul<VecSize> const elemMatMul;
+
+                    //elemMatMul(tmpA,bValue,matDot,jumpLength,numWorkElemsPerDim*numWorkElemsPerDim);
+                    VECTOR_PRAGMA
+                    for( TSize j(0); j < numWorkElemsPerDim*numWorkElemsPerDim; ++j )
+                    {
+                            //matC[Vec2(i,j)] += a * matB[Vec2(k,j)];
+                            matDot[j] += bValue * tmpA[Vec2(j*jumpLength,0)];
+                    }
                 }
                 alpaka::block::sync::syncBlockThreads(acc);
 
@@ -508,6 +515,8 @@
         // Select a device to execute on.
         auto devAcc(
             alpaka::pltf::getDevByIdx< alpaka::pltf::Pltf< alpaka::dev::Dev<TAcc> > >(0));
+        if(sizeof(TElem)==8u)
+            cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeEightByte);
 
         // Get a stream on this device.
         Stream<alpaka::dev::Dev<TAcc>> stream(devAcc);
