@@ -197,24 +197,24 @@
 
             Vec2 const workSize(
                 numThreads[ 0 ] * numWorkElemsPerDim,
-                numThreads[ 1 ] * numWorkElemsPerDim
+                numThreads[ 1 ]
             );
 
-            size_t const linearThreadIdx = alpaka::idx::mapIdx<1u>(
+            TSize const linearThreadIdx = alpaka::idx::mapIdx<1u>(
                 blockThreadIdx,
                 numThreads
             )[0];
 
-            size_t const linerThreadCount = numThreads[0] * numThreads[1];
+            TSize const linerThreadCount = numThreads[0] * numThreads[1];
 
-            size_t const linearWorkSize = workSize[0] * workSize[1];
+            TSize const linearWorkSize = workSize[0] * workSize[1];
 
             Vec2 threadIndex(
-                linearThreadIdx / workSize[0],
+                linearThreadIdx / workSize[1],
                 linearThreadIdx % workSize[1]
             );
 
-            size_t const jumpLength = linerThreadCount / workSize[1];
+            TSize const jumpLength = linerThreadCount / workSize[1];
 
             //Shared alpakaHelperory used to store the current blocks of A and B.
             TElem * const sharedBasePointer(alpaka::block::shared::dyn::getMem<TElem>(acc));
@@ -235,9 +235,9 @@
                 VecSize
             >;
 
-            TElem matDot[numWorkElemsPerDim*numWorkElemsPerDim];
+            TElem matDot[numWorkElemsPerDim];
             VECTOR_PRAGMA
-            for(TSize j(0); j < numWorkElemsPerDim*numWorkElemsPerDim; ++j)
+            for(TSize j(0); j < numWorkElemsPerDim; ++j)
             {
                 matDot[j] = 0;
             }
@@ -254,8 +254,6 @@
                 )
             );
 
-            TSize const currentThreadInA_y( blockThreadIdx[ 0 ] * numWorkElemsPerDim);
-            TSize const currentThreadInB_x( blockThreadIdx[ 1 ] * numWorkElemsPerDim);
             // needs architecture based mapping
             TSize const offsetInA_y(
                 gridBlockIdx[ 0 ] * workSize[ 0 ]
@@ -280,28 +278,22 @@
                 );
 #if REAL_SHARED_MEMORY == 1
                 //load shared A & B
-                VECTOR_PRAGMA
-                for( TSize i(0); i < numWorkElemsPerDim * numWorkElemsPerDim; ++i )
+                for( TSize i(0); i < numWorkElemsPerDim; ++i )
                 {
-                    auto offsetInTile_Y = threadIndex[0] + i * jumpLength;
-                    auto lineSharedA = &(sharedMatA.m_ptr[offsetInTile_Y * sharedMatA.m_extent[1]]);
-                    auto lineSharedB = &(sharedMatB.m_ptr[offsetInTile_Y * sharedMatB.m_extent[1]]);
-                    auto lineMatA = &(matA.m_ptr[(offsetInTile_Y + offsetInA_y) * matA.m_extent[1]]);
-                    auto lineMatB = &(matB.m_ptr[(offsetInTile_Y + offsetA_x) * matB.m_extent[1]]);
+
                     Vec2 const offsetInTile(
-                        offsetInTile_Y,
+                        threadIndex[0] + i * jumpLength,
                         threadIndex[1]
                     );
                     Vec2 const globalIdxA(offsetInTile + globalBlockOffsetInA);
                     Vec2 const globalIdxB(offsetInTile + globalBlockOffsetInB);
 
                     auto const isValidA = (globalIdxA[0]<matA.m_extent[0]) && (globalIdxA[1]<k);
+
                     auto const isValidB = (globalIdxB[0]<matB.m_extent[0]) && (globalIdxB[1]<n);
 
-                    //sharedMatA[ offsetInTile ] = isValidA ? matA[ globalIdxA ] : static_cast<TElem>(0);
-                    //sharedMatB[ offsetInTile ] = isValidB ? matB[ globalIdxB ] : static_cast<TElem>(0);
-                    lineSharedA[offsetInTile[1]] = isValidA ? lineMatA[ globalIdxA[1] ] : static_cast<TElem>(0);
-                    lineSharedB[offsetInTile[1]] = isValidB ? lineMatB[ globalIdxB[1] ] : static_cast<TElem>(0);
+                    sharedMatA[ offsetInTile ] = isValidA ? matA[ globalIdxA ] : static_cast<TElem>(0);
+                    sharedMatB[ offsetInTile ] = isValidB ? matB[ globalIdxB ] : static_cast<TElem>(0);
 
                 }
                 alpaka::block::sync::syncBlockThreads(acc);
@@ -345,13 +337,13 @@
                         )
                     );
 
-                    auto const bValue = tmpB[Vec2(size_t(0),size_t(0))];
+                    auto const bValue = tmpB[Vec2(TSize(0),TSize(0))];
 
                    // ElementMatMul<VecSize> const elemMatMul;
 
                     //elemMatMul(tmpA,bValue,matDot,jumpLength,numWorkElemsPerDim*numWorkElemsPerDim);
                     VECTOR_PRAGMA
-                    for( TSize j(0); j < numWorkElemsPerDim*numWorkElemsPerDim; ++j )
+                    for( TSize j(0); j < numWorkElemsPerDim; ++j )
                     {
                             //matC[Vec2(i,j)] += a * matB[Vec2(k,j)];
                             matDot[j] += bValue * tmpA[Vec2(j*jumpLength,0)];
@@ -362,7 +354,7 @@
             }
 
                 VECTOR_PRAGMA
-                for(TSize j(0); j < numWorkElemsPerDim*numWorkElemsPerDim; ++j)
+                for(TSize j(0); j < numWorkElemsPerDim; ++j)
                 {
                     Vec2 const offsetC(
                         offsetInA_y + threadIndex[0] + j * jumpLength,
@@ -528,13 +520,13 @@
 
         Vec2 const elemExtent(
             static_cast<TSize>(OptimalVectorSize<TAcc>::type::value),
-            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value)
+            static_cast<TSize>(1u)
         );
 
         // Let alpaka calculate good block and grid sizes given our full problem extents.
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
-        const alpaka::vec::Vec<Dim2, TSize> threads (TSize(16), TSize(16));
-        const alpaka::vec::Vec<Dim2, TSize> blocks  (m/threads[0]/elemExtent[0], n/threads[1]/elemExtent[1]);
+        const alpaka::vec::Vec<Dim2, TSize> threads (TSize(16), TSize(32));
+        const alpaka::vec::Vec<Dim2, TSize> blocks  (m/threads[0]/elemExtent[0], n/threads[1]);
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(blocks,threads,elemExtent);
 #else
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(
