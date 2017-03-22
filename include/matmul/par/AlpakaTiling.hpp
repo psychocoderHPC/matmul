@@ -328,16 +328,9 @@
                             )
                         )
                     );
-                    Matrix const tmpB(
-                        sharedMatB.view(
-                            Vec2(
-                                globalIdx_B[ 0 ],
-                                globalIdx_B[ 1 ]
-                            )
-                        )
-                    );
 
-                    auto const bValue = tmpB[Vec2(TSize(0),TSize(0))];
+
+                    auto const bValue = sharedMatB[Vec2(globalIdx_B[ 0 ],globalIdx_B[ 1 ])];
 
                    // ElementMatMul<VecSize> const elemMatMul;
 
