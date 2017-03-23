@@ -33,6 +33,9 @@
     #include <math.h>               // ceil
     #include <type_traits>          // std::is_same
 
+#define BLOCK_SIZE GPU_TILE_SIZE
+#define THREADS GPU_THREADS_NUM
+
     template<
         typename T_Acc
     >
@@ -117,37 +120,33 @@
     };
 #endif
 
-    //#############################################################################
-    //!
-    //#############################################################################
     template<
-        typename T_Size
+        typename T_Type,
+        size_t T_size
     >
-    struct ElementMatMul
-    {
-        template<
-            typename MatA,
-            typename MatB,
-            typename MatC
-        >
-        ALPAKA_FN_ACC
-        void
-        operator()(
-            MatA const & matA,
-            MatB const & matB,
-            MatC* matC,
-            size_t const jumpLength,
-            size_t const results
-        ) const
-        {
-            using Vec2 = typename MatA::IndexType;
+    struct Array{
+        T_Type m_data[T_size];
 
-            VECTOR_PRAGMA
-            for( TSize j(0); j < results; ++j )
-            {
-                    //matC[Vec2(i,j)] += a * matB[Vec2(k,j)];
-                    matC[j] += matB * matA[Vec2(j*jumpLength,0)];
-            }
+        template<
+            typename T_Idx
+        >
+        ALPAKA_FN_HOST_ACC
+        const T_Type &
+        operator[](
+            const T_Idx idx
+        ) const {
+            return m_data[idx];
+        }
+
+        template<
+            typename T_Idx
+        >
+        ALPAKA_FN_HOST_ACC
+        T_Type &
+        operator[](
+            const T_Idx idx
+        ){
+            return m_data[idx];
         }
     };
 
@@ -167,198 +166,96 @@
         ALPAKA_FN_ACC auto operator()(
             TAcc const & acc,
             TSize const & m, TSize const & n, TSize const & k,
+            TSize const & wA, TSize const & wB,
             TElem const & alpha,
-            MatA const & MATMUL_RESTRICT matA,
-            MatB const & MATMUL_RESTRICT matB,
+            const MatA *const MATMUL_RESTRICT A,
+            const MatB *const MATMUL_RESTRICT B,
             TElem const & beta,
-            MatC MATMUL_RESTRICT matC) const
+            MatC* const MATMUL_RESTRICT C) const
         -> void
         {
-            using Dim2 = alpaka::dim::DimInt<2u>;
-            using Vec2 = alpaka::vec::Vec<Dim2, TSize>;
 
-            using VecSize = typename OptimalVectorSize<TAcc>::type;
+            auto const blockIndex(alpaka::idx::getIdx<alpaka::Grid, alpaka::Blocks>(acc));
 
-            using Matrix = alpakaHelper::Matrix<
-                alpakaHelper2::ConstPtrValue<TElem>,
-                Vec2
-            >;
-            using ConstMatrix = alpakaHelper::Matrix<
-                alpakaHelper2::ConstPtrConstValue<TElem>,
-                Vec2
-            >;
+            const TSize threadIndex = alpaka::idx::getIdx<alpaka::Block, alpaka::Threads>(acc)[1];
+            TSize tx2 = threadIndex % BLOCK_SIZE;
+            TSize ty2 = threadIndex / BLOCK_SIZE;
 
-            auto const numThreads(alpaka::workdiv::getWorkDiv<alpaka::Block, alpaka::Threads>(acc));
+            constexpr TSize jumpLength = THREADS / BLOCK_SIZE;
+            constexpr TSize ELEM = BLOCK_SIZE / jumpLength;
 
-            auto const gridBlockIdx(alpaka::idx::getIdx<alpaka::Grid, alpaka::Blocks>(acc));
-            auto const blockThreadIdx(alpaka::idx::getIdx<alpaka::Block, alpaka::Threads>(acc));
+            TSize aBegin = wA * blockIndex[0] * BLOCK_SIZE;
+            TSize aEnd   = aBegin + m - 1;
+            TSize aStep  = BLOCK_SIZE;
 
-            constexpr auto numWorkElemsPerDim = static_cast<TSize>(VecSize::value);
+            TSize bBegin = BLOCK_SIZE * blockIndex[1] + tx2;
+            TSize bStep  = wB * BLOCK_SIZE;
 
-            Vec2 const workSize(
-                numThreads[ 0 ] * numWorkElemsPerDim,
-                numThreads[ 1 ]
-            );
-
-            TSize const linearThreadIdx = alpaka::idx::mapIdx<1u>(
-                blockThreadIdx,
-                numThreads
-            )[0];
-
-            TSize const linerThreadCount = numThreads[0] * numThreads[1];
-
-            TSize const linearWorkSize = workSize[0] * workSize[1];
-
-            Vec2 threadIndex(
-                linearThreadIdx / workSize[1],
-                linearThreadIdx % workSize[1]
-            );
-
-            TSize const jumpLength = linerThreadCount / workSize[1];
-
-            //Shared alpakaHelperory used to store the current blocks of A and B.
-            TElem * const sharedBasePointer(alpaka::block::shared::dyn::getMem<TElem>(acc));
-            TElem * const sharedBasePointerB(sharedBasePointer + workSize[0] * workSize[1]);
-#if REAL_SHARED_MEMORY == 1
-            Matrix sharedMatA(
-                sharedBasePointer,
-                workSize
-            );
-            Matrix sharedMatB(
-                sharedBasePointerB,
-                workSize
-            );
-#endif
-
-            using MVecNN = alpakaHelper::MathVec<
+            Array<
                 TElem,
-                VecSize
-            >;
-
-            TElem matDot[numWorkElemsPerDim];
-            VECTOR_PRAGMA
-            for(TSize j(0); j < numWorkElemsPerDim; ++j)
+                ELEM
+            > Csub;
+            for(int y=0;y<ELEM;++y)
             {
-                matDot[j] = 0;
+                Csub[y]=0;
             }
-
-            // Loop over all blocks of A and B that are required to compute the C block.
-            TSize const nBlocks(
-                static_cast<TSize>(
-                    alpaka::math::ceil(
-                        acc,
-                        static_cast<float>(k)/static_cast<float>(
-                            workSize[1]
-                        )
-                    )
-                )
-            );
-
-            // needs architecture based mapping
-            TSize const offsetInA_y(
-                gridBlockIdx[ 0 ] * workSize[ 0 ]
-
-            );
-            TSize const offsetInB_x(
-                gridBlockIdx[ 1 ] * workSize[ 1 ]
-
-            );
+            auto& As = ::alpaka::block::shared::st::allocVar<
+                Array<
+                    Array<
+                        TElem,
+                        BLOCK_SIZE
+                    >,
+                    BLOCK_SIZE
+                >,
+                0
+            >(acc);
+            auto& Bs = ::alpaka::block::shared::st::allocVar<
+                Array<
+                    Array<
+                        TElem,
+                        BLOCK_SIZE
+                    >,
+                    BLOCK_SIZE
+                >,
+                1
+            >(acc);
 
             VECTOR_PRAGMA
-            for(TSize blockA_x = 0; blockA_x < nBlocks; ++blockA_x)
+            for (TSize a = aBegin, b = bBegin;
+                 a <= aEnd;
+                 a += aStep, b += bStep)
             {
-                TSize const offsetA_x = blockA_x * workSize[ 1 ];
-                Vec2 const globalBlockOffsetInA(
-                    offsetInA_y,
-                    offsetA_x
-                );
-                Vec2 const globalBlockOffsetInB(
-                    offsetA_x,
-                    offsetInB_x
-                );
-#if REAL_SHARED_MEMORY == 1
-                //load shared A & B
-                for( TSize i(0); i < numWorkElemsPerDim; ++i )
+                VECTOR_PRAGMA
+                for(TSize y=0;y<ELEM;++y)
                 {
-
-                    Vec2 const offsetInTile(
-                        threadIndex[0] + i * jumpLength,
-                        threadIndex[1]
-                    );
-                    Vec2 const globalIdxA(offsetInTile + globalBlockOffsetInA);
-                    Vec2 const globalIdxB(offsetInTile + globalBlockOffsetInB);
-
-                    auto const isValidA = (globalIdxA[0]<matA.m_extent[0]) && (globalIdxA[1]<k);
-
-                    auto const isValidB = (globalIdxB[0]<matB.m_extent[0]) && (globalIdxB[1]<n);
-
-                    sharedMatA[ offsetInTile ] = isValidA ? matA[ globalIdxA ] : static_cast<TElem>(0);
-                    sharedMatB[ offsetInTile ] = isValidB ? matB[ globalIdxB ] : static_cast<TElem>(0);
-
+                    TSize ty = ty2 + y * jumpLength;
+                    As[ty][tx2] = A[a + wA * ty + tx2];
+                    Bs[ty][tx2] = B[b + wB * ty ];
                 }
                 alpaka::block::sync::syncBlockThreads(acc);
-#else
-                //create view of A & B
-                ConstMatrix sharedMatA(
-                    matA.view(globalBlockOffsetInA)
-                );
-                ConstMatrix sharedMatB(
-                    matB.view(globalBlockOffsetInB)
-                );
-#endif
-                // move over line in A workSize
-                // move over line in A workSize
-                for(TSize k3(0); k3 < workSize[ 1 ]; ++k3)
-                {
-
-                    Vec2 const globalIdx_A(
-                        threadIndex[0],
-                        k3
-                    );
-                    Vec2 const globalIdx_B(
-                        k3,
-                        threadIndex[1]
-                    );
-
-                    Matrix const tmpA(
-                        sharedMatA.view(
-                            Vec2(
-                                globalIdx_A[ 0 ],
-                                globalIdx_A[ 1 ]
-                            )
-                        )
-                    );
-
-
-                    auto const bValue = sharedMatB[Vec2(globalIdx_B[ 0 ],globalIdx_B[ 1 ])];
-
-                   // ElementMatMul<VecSize> const elemMatMul;
-
-                    //elemMatMul(tmpA,bValue,matDot,jumpLength,numWorkElemsPerDim*numWorkElemsPerDim);
-                    VECTOR_PRAGMA
-                    for( TSize j(0); j < numWorkElemsPerDim; ++j )
-                    {
-                            //matC[Vec2(i,j)] += a * matB[Vec2(k,j)];
-                            matDot[j] += bValue * tmpA[Vec2(j*jumpLength,0)];
-                    }
-                }
-                alpaka::block::sync::syncBlockThreads(acc);
-
-            }
 
                 VECTOR_PRAGMA
-                for(TSize j(0); j < numWorkElemsPerDim; ++j)
+                for (TSize k = 0; k < BLOCK_SIZE; ++k)
                 {
-                    Vec2 const offsetC(
-                        offsetInA_y + threadIndex[0] + j * jumpLength,
-                        offsetInB_x + threadIndex[1]
-                    );
-                    auto const isValid = (offsetC[0] < matC.m_extent[0]) && (offsetC[1] <  n);
-
-                    if(isValid)
-                        matC[ offsetC ] = alpha * matDot[ j ] + beta * matC[ offsetC ];
-
+                    const TElem bs = Bs[k][tx2];
+                    for(TSize y=0;y<ELEM;++y)
+                    {
+                        const TSize ty = ty2 + y * jumpLength;
+                        Csub[y] += As[ty][k] * bs;
+                    }
                 }
+
+                alpaka::block::sync::syncBlockThreads(acc);
+            }
+
+            const TSize c = wB * blockIndex[0] * BLOCK_SIZE + BLOCK_SIZE * blockIndex[1] + tx2;
+            VECTOR_PRAGMA
+            for(TSize y=0;y<ELEM;++y)
+            {
+                const TSize ty = ty2 + y * jumpLength;
+                const TSize cOffset = c + wB * ty;
+                C[cOffset] = alpha * Csub[y] + beta * C[cOffset];
+            }
 
         }
     };
@@ -394,11 +291,13 @@
                         TSize const & m,
                         TSize const & n,
                         TSize const & k,
+                        TSize const & wA,
+                        TSize const & wB,
                         TElem const & alpha,
-                        MatA const & MATMUL_RESTRICT matA,
-                        MatB const & MATMUL_RESTRICT matB,
+                        const MatA *const MATMUL_RESTRICT matA,
+                        const MatB *const MATMUL_RESTRICT matB,
                         TElem const & beta,
-                        MatC matC)
+                        MatC* const matC)
                     -> size::Size<TAcc>
                     {
                         static_assert(
@@ -406,7 +305,6 @@
                             "TSize and size::Size<TAcc> have to be identical!");
 
                         boost::ignore_unused(m);
-                        boost::ignore_unused(n);
                         boost::ignore_unused(k);
                         boost::ignore_unused(alpha);
                         boost::ignore_unused(matA);
@@ -415,11 +313,7 @@
                         boost::ignore_unused(matC);
 
                         // Reserve the buffer for the two blocks of A and B.
-#if REAL_SHARED_MEMORY == 1
-                        return 2u * blockThreadExtent.prod() * threadElemExtent.prod() * sizeof(TElem);
-#else
                         return 0;
-#endif
                     }
                 };
 
@@ -511,15 +405,18 @@
             m,
             n);
 
+        constexpr TSize jumpLength = THREADS / BLOCK_SIZE;
+        constexpr TSize ELEM = BLOCK_SIZE / jumpLength;
+
         Vec2 const elemExtent(
-            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value),
+            static_cast<TSize>(ELEM),
             static_cast<TSize>(1u)
         );
 
         // Let alpaka calculate good block and grid sizes given our full problem extents.
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
-        const alpaka::vec::Vec<Dim2, TSize> threads (TSize(16), TSize(32));
-        const alpaka::vec::Vec<Dim2, TSize> blocks  (m/threads[0]/elemExtent[0], n/threads[1]);
+        const alpaka::vec::Vec<Dim2, TSize> threads (TSize(1), TSize(THREADS));
+        const alpaka::vec::Vec<Dim2, TSize> blocks  (m/TSize(BLOCK_SIZE), n/TSize(BLOCK_SIZE));
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(blocks,threads,elemExtent);
 #else
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(
@@ -558,38 +455,6 @@
         // Create an instance of the kernel functor.
         TKernelFnObj kernel;
 
-        using Matrix = alpakaHelper::Matrix<
-            alpakaHelper2::ConstPtrValue<TElem>,
-            Vec2
-        >;
-
-        using ConstMatrix = alpakaHelper::Matrix<
-            alpakaHelper2::ConstPtrConstValue<TElem>,
-            Vec2
-        >;
-
-        ConstMatrix const matA(
-            A,
-            Vec2(
-                m,
-                lda
-            )
-        );
-
-        ConstMatrix const matB(
-            B,
-            Vec2(
-                k,
-                ldb
-            )
-        );
-        Matrix matC(
-            C,
-            Vec2(
-                m,
-                ldc
-            )
-        );
 
         // Create the executor.
         auto const exec(alpaka::exec::create<TAcc>(
@@ -598,11 +463,13 @@
             m,
             n,
             k,
+            lda,
+            ldb,
             alpha,
-            matA,
-            matB,
+            A,
+            B,
             beta,
-            matC));
+            C));
         MATMUL_TIME_START;
 
         // Execute the kernel.
@@ -662,9 +529,12 @@
             m,
             n);
 
+        constexpr TSize jumpLength = THREADS / BLOCK_SIZE;
+        constexpr TSize ELEM = BLOCK_SIZE / jumpLength;
+
         Vec2 const elemExtent(
-            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value),
-            static_cast<TSize>(OptimalVectorSize<TAcc>::type::value)
+            static_cast<TSize>(ELEM),
+            static_cast<TSize>(1u)
         );
 
 
@@ -718,8 +588,8 @@
 
         // Let alpaka calculate good block and grid sizes given our full problem extents.
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
-        const alpaka::vec::Vec<Dim2, TSize> threads (TSize(16), TSize(16));
-        const alpaka::vec::Vec<Dim2, TSize> blocks  (m/threads[0]/elemExtent[0], n/threads[1]/elemExtent[1]);
+        const alpaka::vec::Vec<Dim2, TSize> threads (TSize(1), TSize(THREADS));
+        const alpaka::vec::Vec<Dim2, TSize> blocks  (m/TSize(BLOCK_SIZE), n/TSize(BLOCK_SIZE));
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(blocks,threads,elemExtent);
 #else
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(
@@ -755,38 +625,7 @@
 #else
                   << std::endl;
 #endif
-        using Matrix = alpakaHelper::Matrix<
-            alpakaHelper2::ConstPtrValue<TElem>,
-            Vec2
-        >;
 
-        using ConstMatrix = alpakaHelper::Matrix<
-            alpakaHelper2::ConstPtrConstValue<TElem>,
-            Vec2
-        >;
-
-        ConstMatrix const matA(
-            alpaka::mem::view::getPtrNative(bufAAcc),
-            Vec2(
-                m,
-                alpaka::mem::view::getPitchBytes<1>(bufAAcc) / elemSize
-            )
-        );
-
-        ConstMatrix const matB(
-            alpaka::mem::view::getPtrNative(bufBAcc),
-            Vec2(
-                k,
-                alpaka::mem::view::getPitchBytes<1>(bufBAcc) / elemSize
-            )
-        );
-        Matrix matC(
-            alpaka::mem::view::getPtrNative(bufCAcc),
-            Vec2(
-                m,
-                alpaka::mem::view::getPitchBytes<1>(bufCAcc) / elemSize
-            )
-        );
 
         // Create an instance of the kernel functor.
         TKernelFnObj kernel;
@@ -798,11 +637,13 @@
             m,
             n,
             k,
+            lda,
+            ldb,
             alpha,
-            matA,
-            matB,
+            A,
+            B,
             beta,
-            matC));
+            C));
 
 #ifdef MATMUL_RETURN_COMPUTATION_TIME
         alpaka::wait::wait(stream);
