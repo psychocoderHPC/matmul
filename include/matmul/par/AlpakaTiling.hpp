@@ -205,6 +205,9 @@
                 for(TSize x=0;x<ELEM_X;++x)
                     Csub[y][x]=0;
             }
+            TElem * const __restrict As(alpaka::block::shared::dyn::getMem<TElem>(acc));
+            TElem * const __restrict Bs(As + BLOCK_SIZE * BLOCK_SIZE);
+#if 0
             auto& As = ::alpaka::block::shared::st::allocVar<
                 Array<
                     TElem,
@@ -219,7 +222,7 @@
                 >,
                 1
             >(acc);
-
+#endif
             VECTOR_PRAGMA
             for (TSize a = aBegin, b = bBegin;
                  a <= aEnd;
@@ -237,17 +240,7 @@
                     }
                 }
                 alpaka::block::sync::syncBlockThreads(acc);
-#if 0
-                if(threadIndex==0)
-                {
-                    for(int y=0;y<BLOCK_SIZE;++y)
-                    {
-                        for(int x=0;x<BLOCK_SIZE;++x)
-                            printf("%f,",Bs[y * BLOCK_SIZE +  x]);
-                        printf("\n");
-                    }
-                }
-#endif
+
                 VECTOR_PRAGMA
                 for (TSize k = 0; k < BLOCK_SIZE; ++k)
                 {
@@ -337,7 +330,7 @@
                         boost::ignore_unused(matC);
 
                         // Reserve the buffer for the two blocks of A and B.
-                        return 0;
+                        return 2u * BLOCK_SIZE * BLOCK_SIZE * sizeof(TElem);;
                     }
                 };
 
@@ -402,10 +395,10 @@
     TReturn matmul_gemm_par_alpaka_tiling(
         TSize const m, TSize const n, TSize const k,
         TElem const alpha,
-        TElem const * const MATMUL_RESTRICT A, TSize const lda,
-        TElem const * const MATMUL_RESTRICT B, TSize const ldb,
+        TElem const * const A, TSize const lda,
+        TElem const * const B, TSize const ldb,
         TElem const beta,
-        TElem * const MATMUL_RESTRICT C, TSize const ldc)
+        TElem * const C, TSize const ldc)
     {
         using Dim2 = alpaka::dim::DimInt<2u>;
         using Vec2 = alpaka::vec::Vec<Dim2, TSize>;
@@ -441,21 +434,10 @@
         );
 
         // Let alpaka calculate good block and grid sizes given our full problem extents.
-//#ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
         const alpaka::vec::Vec<Dim2, TSize> threads (TSize(1), TSize(THREADS));
         const alpaka::vec::Vec<Dim2, TSize> blocks  (m/TSize(BLOCK_SIZE), n/TSize(BLOCK_SIZE));
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(blocks,threads,elemExtent);
-#if 0
-//#else
-        alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(
-            alpaka::workdiv::getValidWorkDiv<TAcc>(
-                devAcc,
-                v2uiExtentsC,
-                elemExtent,
-                false,
-                alpaka::workdiv::GridBlockExtentSubDivRestrictions::EqualExtent));
-//#endif
-#endif
+
 
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
         //cudaDeviceSetCacheConfig( cudaFuncCachePreferL1 );
@@ -520,10 +502,10 @@
     TReturn matmul_gemm_par_alpaka_memcpy_tiling(
         TSize const m, TSize const n, TSize const k,
         TElem const alpha,
-        TElem const * const MATMUL_RESTRICT A, TSize const lda,
-        TElem const * const MATMUL_RESTRICT B, TSize const ldb,
+        TElem const * const A, TSize const lda,
+        TElem const * const B, TSize const ldb,
         TElem const beta,
-        TElem * const MATMUL_RESTRICT C, TSize const ldc)
+        TElem * const C, TSize const ldc)
     {
         std::cout << "Using explicit memcpy" << std::endl;
         using Dim2 = alpaka::dim::DimInt<2u>;
@@ -541,6 +523,11 @@
         // Select a device to execute on.
         auto devAcc(
             alpaka::pltf::getDevByIdx< alpaka::pltf::Pltf< alpaka::dev::Dev<TAcc> > >(0));
+
+#if defined(ALPAKA_ACC_GPU_CUDA_ENABLED)
+        if(sizeof(TElem)==8u)
+            cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeEightByte);
+#endif
 
         // Get a stream on this device.
         Stream<alpaka::dev::Dev<TAcc>> stream(devAcc);
@@ -617,19 +604,11 @@
         alpaka::mem::view::copy(stream, bufCAcc, bufCHost, v2uiExtentsC);
 
         // Let alpaka calculate good block and grid sizes given our full problem extents.
-#ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
+
         const alpaka::vec::Vec<Dim2, TSize> threads (TSize(1), TSize(THREADS));
         const alpaka::vec::Vec<Dim2, TSize> blocks  (m/TSize(BLOCK_SIZE), n/TSize(BLOCK_SIZE));
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(blocks,threads,elemExtent);
-#else
-        alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(
-            alpaka::workdiv::getValidWorkDiv<TAcc>(
-                devAcc,
-                v2uiExtentsC,
-                elemExtent,
-                false,
-                alpaka::workdiv::GridBlockExtentSubDivRestrictions::EqualExtent));
-#endif
+
 
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
         //cudaDeviceSetCacheConfig( cudaFuncCachePreferL1 );
