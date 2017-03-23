@@ -73,6 +73,7 @@
 #define VECTOR_PRAGMA \
     /*_Pragma ("vector aligned")*/ \
     /*_Pragma ("unroll (8)")*/ \
+    _Pragma ("unroll") \
     _Pragma ("ivdep") \
     _Pragma ("GCC ivdep")
 
@@ -181,41 +182,40 @@
             TSize tx2 = threadIndex % BLOCK_SIZE;
             TSize ty2 = threadIndex / BLOCK_SIZE;
 
-            constexpr TSize jumpLength = THREADS / BLOCK_SIZE;
+            constexpr TSize jumpLength = (THREADS + BLOCK_SIZE - 1) / BLOCK_SIZE;
             constexpr TSize ELEM = BLOCK_SIZE / jumpLength;
+            constexpr TSize ELEM_X = (BLOCK_SIZE + THREADS - 1u)  / THREADS;
 
             TSize aBegin = wA * blockIndex[0] * BLOCK_SIZE;
             TSize aEnd   = aBegin + m - 1;
             TSize aStep  = BLOCK_SIZE;
 
-            TSize bBegin = BLOCK_SIZE * blockIndex[1] + tx2;
+            TSize bBegin = BLOCK_SIZE * blockIndex[1];
             TSize bStep  = wB * BLOCK_SIZE;
 
             Array<
-                TElem,
+                Array<
+                    TElem,
+                    ELEM_X
+                >,
                 ELEM
-            > Csub;
+             > Csub;
             for(int y=0;y<ELEM;++y)
             {
-                Csub[y]=0;
+                for(TSize x=0;x<ELEM_X;++x)
+                    Csub[y][x]=0;
             }
             auto& As = ::alpaka::block::shared::st::allocVar<
                 Array<
-                    Array<
-                        TElem,
-                        BLOCK_SIZE
-                    >,
-                    BLOCK_SIZE
+                    TElem,
+                    BLOCK_SIZE * BLOCK_SIZE
                 >,
                 0
             >(acc);
             auto& Bs = ::alpaka::block::shared::st::allocVar<
                 Array<
-                    Array<
-                        TElem,
-                        BLOCK_SIZE
-                    >,
-                    BLOCK_SIZE
+                    TElem,
+                    BLOCK_SIZE * BLOCK_SIZE
                 >,
                 1
             >(acc);
@@ -228,20 +228,40 @@
                 VECTOR_PRAGMA
                 for(TSize y=0;y<ELEM;++y)
                 {
-                    TSize ty = ty2 + y * jumpLength;
-                    As[ty][tx2] = A[a + wA * ty + tx2];
-                    Bs[ty][tx2] = B[b + wB * ty ];
+                    VECTOR_PRAGMA
+                    for(TSize x=0;x<ELEM_X;++x)
+                    {
+                        TSize ty = ty2 + y * jumpLength;
+                        As[ty * BLOCK_SIZE + tx2 + x * THREADS] = A[a + wA * ty + tx2 + x*THREADS];
+                        Bs[ty * BLOCK_SIZE + tx2 + x * THREADS] = B[b + wB * ty + tx2 + x*THREADS];
+                    }
                 }
                 alpaka::block::sync::syncBlockThreads(acc);
-
+#if 0
+                if(threadIndex==0)
+                {
+                    for(int y=0;y<BLOCK_SIZE;++y)
+                    {
+                        for(int x=0;x<BLOCK_SIZE;++x)
+                            printf("%f,",Bs[y * BLOCK_SIZE +  x]);
+                        printf("\n");
+                    }
+                }
+#endif
                 VECTOR_PRAGMA
                 for (TSize k = 0; k < BLOCK_SIZE; ++k)
                 {
-                    const TElem bs = Bs[k][tx2];
+                    const TElem * const bs = &(Bs[k * BLOCK_SIZE + tx2]);
+                    VECTOR_PRAGMA
                     for(TSize y=0;y<ELEM;++y)
                     {
                         const TSize ty = ty2 + y * jumpLength;
-                        Csub[y] += As[ty][k] * bs;
+                        const TElem as = As[ty * BLOCK_SIZE + k];
+                        VECTOR_PRAGMA
+                        for(TSize x=0;x<ELEM_X;++x)
+                        {
+                            Csub[y][x] += as * bs[x*THREADS];
+                        }
                     }
                 }
 
@@ -253,8 +273,12 @@
             for(TSize y=0;y<ELEM;++y)
             {
                 const TSize ty = ty2 + y * jumpLength;
-                const TSize cOffset = c + wB * ty;
-                C[cOffset] = alpha * Csub[y] + beta * C[cOffset];
+                VECTOR_PRAGMA
+                for(TSize x=0;x<ELEM_X;++x)
+                {
+                    const TSize cOffset = c + wB * ty + x*THREADS;
+                    C[cOffset] = alpha * Csub[y][x] + beta * C[cOffset];
+                }
             }
 
         }
@@ -394,8 +418,10 @@
         // Select a device to execute on.
         auto devAcc(
             alpaka::pltf::getDevByIdx< alpaka::pltf::Pltf< alpaka::dev::Dev<TAcc> > >(0));
+#if defined(ALPAKA_ACC_GPU_CUDA_ENABLED)
         if(sizeof(TElem)==8u)
             cudaDeviceSetSharedMemConfig(cudaSharedMemBankSizeEightByte);
+#endif
 
         // Get a stream on this device.
         Stream<alpaka::dev::Dev<TAcc>> stream(devAcc);
@@ -405,20 +431,22 @@
             m,
             n);
 
-        constexpr TSize jumpLength = THREADS / BLOCK_SIZE;
+        constexpr TSize jumpLength = (THREADS + BLOCK_SIZE - 1) / BLOCK_SIZE;
         constexpr TSize ELEM = BLOCK_SIZE / jumpLength;
+        constexpr TSize ELEM_X = (BLOCK_SIZE + THREADS - 1u)  / THREADS;
 
         Vec2 const elemExtent(
             static_cast<TSize>(ELEM),
-            static_cast<TSize>(1u)
+            static_cast<TSize>(ELEM_X)
         );
 
         // Let alpaka calculate good block and grid sizes given our full problem extents.
-#ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
+//#ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
         const alpaka::vec::Vec<Dim2, TSize> threads (TSize(1), TSize(THREADS));
         const alpaka::vec::Vec<Dim2, TSize> blocks  (m/TSize(BLOCK_SIZE), n/TSize(BLOCK_SIZE));
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(blocks,threads,elemExtent);
-#else
+#if 0
+//#else
         alpaka::workdiv::WorkDivMembers<Dim2, TSize> workDiv(
             alpaka::workdiv::getValidWorkDiv<TAcc>(
                 devAcc,
@@ -426,6 +454,7 @@
                 elemExtent,
                 false,
                 alpaka::workdiv::GridBlockExtentSubDivRestrictions::EqualExtent));
+//#endif
 #endif
 
 #ifdef ALPAKA_ACC_GPU_CUDA_ENABLED
@@ -529,12 +558,13 @@
             m,
             n);
 
-        constexpr TSize jumpLength = THREADS / BLOCK_SIZE;
+        constexpr TSize jumpLength = (THREADS + BLOCK_SIZE - 1) / BLOCK_SIZE;
         constexpr TSize ELEM = BLOCK_SIZE / jumpLength;
+        constexpr TSize ELEM_X = (BLOCK_SIZE + THREADS - 1u)  / THREADS;
 
         Vec2 const elemExtent(
             static_cast<TSize>(ELEM),
-            static_cast<TSize>(1u)
+            static_cast<TSize>(ELEM_X)
         );
 
 

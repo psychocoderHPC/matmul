@@ -1,6 +1,6 @@
 #!/bin/bash
 TILESIZE="32"
-NUMTHREADS="256"
+NUMTHREADS="512"
 cd `dirname $0`
 src_dir=`pwd`
 cd -
